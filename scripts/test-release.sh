@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Tests use isolated public fixtures and must never inherit live signing access.
+unset SPARKLE_PRIVATE_ED_KEY SPARKLE_KEYCHAIN_ACCOUNT
 work="$PWD/.build/release-tests"
 mkdir -p "$work"
 for script in scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/*release*.sh; do
@@ -18,12 +20,13 @@ for path in [Path("Resources/Info.plist"), Path("Resources/Cairn.entitlements")]
         plistlib.load(stream)
 print("Python syntax and plist templates validated.")
 PY
-scripts/swiftw build --product Cairn
+scripts/swiftw package resolve
 framework="$PWD/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64"
 swiftc -parse-as-library Sources/CairnUpdater/Updater.swift Resources/ReleaseTools/UpdateTests.swift \
   -F "$framework" -framework Sparkle -Xlinker -rpath -Xlinker "$framework" -o "$work/update-tests"
 "$work/update-tests" "$work"
 python3 Resources/ReleaseTools/PackagingTests.py "$work"
+python3 Resources/ReleaseTools/SigningTests.py
 # RFC 8032 public key + signature for an empty message; private material is never needed.
 public_key="11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 signature="5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="
