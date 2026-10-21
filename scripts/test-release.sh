@@ -39,4 +39,8 @@ fi
 if SPARKLE_PRIVATE_ED_KEY='' scripts/make-appcast.sh "$work/missing.zip" > "$work/missing-key.log" 2>&1; then
   echo "ERROR: unsigned appcast was accepted" >&2; exit 1
 fi
+if CAIRN_WITH_CHROMIUM=1 ARCH=universal scripts/bundle-app.sh > "$work/universal-cef.log" 2>&1; then
+  echo "ERROR: unsupported universal Chromium bundle was accepted" >&2; exit 1
+fi
+grep -q 'Chromium packaging requires a single architecture' "$work/universal-cef.log"
 echo "Release tooling checks passed, including fail-closed and tamper checks."
