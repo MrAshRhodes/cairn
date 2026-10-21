@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "local.reading",
+  "name": "Reading",
+  "version": "1.0.0",
+  "commands": [
+    {
+      "id": "open-example",
+      "title": "Open Example",
+      "subtitle": "Open a reference page in a new tab",
+      "symbol": "book",
+      "keywords": ["reading", "reference"],
+      "action": {
+        "type": "openURL",
+        "url": "https://example.com/",
+        "target": "newTab"
+      }
+    }
+  ]
+}

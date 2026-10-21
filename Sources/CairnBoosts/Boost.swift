@@ -1,10 +1,11 @@
 import Foundation
 import CairnEngineKit
 
-// FROZEN data shape (see CairnEngineKit/Engine.swift for the rule). The boosts agent implements storage + injection.
+// FROZEN data shape (see CairnEngineKit/Engine.swift for the rule).
 
 /// A per-site customization: CSS and/or JavaScript applied on pages whose host matches one of `hostPatterns`
-/// ("example.com" matches the host and its subdomains; "*" matches everything).
+/// ("example.com" matches the host and its subdomains; "*.example.com" matches subdomains only;
+/// "*" explicitly matches every HTTP(S) host). JavaScript requires a separate, session-only trust grant.
 public struct Boost: Codable, Identifiable, Hashable, Sendable {
     public var id: UUID
     public var name: String
