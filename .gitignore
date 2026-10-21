@@ -1,0 +1,17 @@
+.build/
+.swiftpm/
+dist/
+*.xcodeproj
+.DS_Store
+# downloaded Chromium Embedded Framework distributions
+engine/cef/
+engine/.cache/
+# never commit signing material
+*.p12
+*.pem
+*.key
+*.mobileprovision
+*.provisionprofile
+sparkle_*private*
+.env
+.env.*

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# `swift` wrapper that also works on machines with only the Command Line Tools (no Xcode):
+# there the default SwiftPM build system and XCTest are unavailable, so we use the native build
+# system and point Swift Testing at the CLT copy of the framework.
+# Usage: scripts/swiftw build|test|run [swift args...]   (CI with Xcode: behaves like plain `swift`)
+set -euo pipefail
+cmd="${1:-build}"
+[ $# -gt 0 ] && shift
+args=()
+case "$cmd" in
+  build|test|run)
+    if ! xcodebuild -version >/dev/null 2>&1; then
+      CLT=/Library/Developer/CommandLineTools
+      FW="$CLT/Library/Developer/Frameworks"
+      LIB="$CLT/Library/Developer/usr/lib"
+      args+=(--build-system native)
+      if [ "$cmd" = "test" ]; then
+        args+=(-Xswiftc -F -Xswiftc "$FW" -Xswiftc -plugin-path -Xswiftc "$CLT/usr/lib/swift/host/plugins/testing"
+               -Xlinker -F -Xlinker "$FW" -Xlinker -rpath -Xlinker "$FW" -Xlinker -rpath -Xlinker "$LIB")
+      fi
+    fi
+    ;;
+esac
+exec swift "$cmd" ${args[@]+"${args[@]}"} "$@"
