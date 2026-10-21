@@ -52,4 +52,11 @@ public final class ModuleRegistry {
     public func allCommands(for model: BrowserModel) -> [Command] {
         modules.flatMap { $0.commands(for: model) }
     }
+
+    public func loadUserModules(from directory: URL) throws { throw ServiceError.notImplemented }
+}
+
+@MainActor
+public enum BuiltinModules {
+    public static func all() -> [CairnModule] { [] }
 }

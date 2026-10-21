@@ -30,10 +30,13 @@ public struct EngineTabState: Equatable, Sendable {
     public var canGoBack: Bool
     public var canGoForward: Bool
     public var isSecure: Bool
+    public var errorMessage: String?
     public init(url: URL? = nil, title: String = "", isLoading: Bool = false, progress: Double = 0,
-                canGoBack: Bool = false, canGoForward: Bool = false, isSecure: Bool = false) {
+                canGoBack: Bool = false, canGoForward: Bool = false, isSecure: Bool = false,
+                errorMessage: String? = nil) {
         self.url = url; self.title = title; self.isLoading = isLoading; self.progress = progress
         self.canGoBack = canGoBack; self.canGoForward = canGoForward; self.isSecure = isSecure
+        self.errorMessage = errorMessage
     }
 }
 

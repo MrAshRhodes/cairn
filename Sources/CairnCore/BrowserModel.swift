@@ -27,6 +27,7 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var downloadHandler: ((URL, String?) -> Void)?
     /// Fired after every mutation of `workspace`; persistence subscribes here.
     @ObservationIgnored public var onChange: (() -> Void)?
+    @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine
@@ -221,10 +222,14 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func engineTab(_ tab: EngineTab, didChange state: EngineTabState) {
         guard let id = itemID(for: tab) else { return }
+        let previous = tabStates[id]
         tabStates[id] = state
         let before = item(id)
         update(id) { if let u = state.url { $0.url = u }; if !state.title.isEmpty { $0.title = state.title } }
         if item(id) != before { changed() }
+        if !state.isLoading, previous?.isLoading == true, let url = state.url {
+            onNavigationCommitted?(url, state.title)
+        }
     }
     public func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) {
         if let id = itemID(for: tab) { favicons[id] = image }
