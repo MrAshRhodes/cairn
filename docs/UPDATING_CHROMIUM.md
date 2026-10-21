@@ -1,8 +1,9 @@
-# Optional Chromium / CEF engine
+# Chromium / CEF engine
 
-**WebKit is the default.** Chromium is an experimental, explicitly enabled build
-option, not a claim of equivalence to Google Chrome. A normal `scripts/swiftw
+**`make app` builds the experimental Chromium app; published v0.1.0 downloads use
+WebKit.** This is not a claim of equivalence to Google Chrome. A normal `scripts/swiftw
 build` neither downloads CEF nor compiles/links its bridge, wrapper or helpers.
+Use `make webkit-app` for a system-WebKit-only application bundle.
 Downloaded binaries and build caches stay in ignored `engine/cef/` and
 `engine/.cache/`. No Arc executable, private source, branding or resources are used.
 
@@ -24,7 +25,7 @@ numbers do not independently prove safety. Consult
 [Chrome releases](https://chromereleases.googleblog.com/),
 [ChromiumDash](https://chromiumdash.appspot.com/releases?platform=Mac), the
 [CEF build index](https://cef-builds.spotifycdn.com/index.html), and CEF release
-notes. Keep Chromium opt-in and do not approve a public Chromium-enabled release
+notes. Keep Chromium labelled experimental and do not approve a public Chromium-enabled release
 until a maintainer has documented the outstanding security risk and validation.
 
 ```sh
@@ -60,7 +61,15 @@ python3 engine/tool.py build --arch arm64
 CAIRN_WITH_CHROMIUM=1 scripts/swiftw build
 # Explicit product for release scripts that otherwise build only Cairn:
 CAIRN_WITH_CHROMIUM=1 scripts/swiftw build --product CairnHelper
+# Or build and package both matching products:
+make app
 ```
+
+Bundled builds select Chromium for fresh settings when it is registered. Saved
+engine choices take precedence. Existing users can select Chromium in Settings;
+bundling it must not silently migrate their WebKit preference or browsing data.
+The bundler builds the main app and helper with the same architecture/configuration
+and passes the resolved helper path, rather than assuming SwiftPM's generic debug path.
 
 `cef.lock.json` pins the stable CEF version, contained Chromium version, exact
 minimal archive name, byte size and upstream SHA-1 for **both** macOS architectures.
@@ -188,8 +197,11 @@ After building both executable products in the **same configuration** and stagin
 the normal main app and Info.plist:
 
 ```sh
-python3 engine/bundle.py --app dist/Cairn.app --configuration release --arch arm64
+python3 engine/bundle.py --app dist/Cairn.app --configuration release --arch arm64 \
+  --helper /absolute/path/to/matching/CairnHelper
 ```
+
+`scripts/bundle-app.sh` supplies that exact helper path automatically.
 
 The helper adds exactly this layout (including all upstream resources/locales):
 
@@ -269,6 +281,9 @@ scripts/swiftw build
 The smoke test actually embeds the child view, loads local pages, evaluates JS,
 installs/removes scripts, finds text, changes zoom, takes a snapshot, checks Space
 and private isolation, clears cookies, blocks unsolicited popups and closes CEF.
+It also verifies CSS grid, container queries, `:has()`, JavaScript modules, fetch,
+the network user agent's locked Chromium version, DOM events, viewport resizing
+and the captured compositor image dimensions.
 It fails if the process exits without the success marker. Retain its diagnostic
 logs on failure. It does not replace certificate/permission/manual UI tests,
 Developer ID/notarization verification, or testing on Intel hardware.
@@ -278,7 +293,7 @@ Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
 * Default and `CAIRN_WITH_CHROMIUM=1` full Swift builds succeeded.
 * The sandbox-enabled C++ wrapper and helper built with Makefiles, without Ninja.
 * All 16 offline maintenance tests passed; `actionlint` accepted the workflow.
-* The explicitly non-hardened development smoke completed all 15 assertions and
+* The explicitly non-hardened development smoke completed all 22 assertions and
   orderly process exit, with no CEF assertion diagnostics. This is **functional
   arm64 evidence**, not notarization, Intel execution or hardened-release proof.
 * A hardened ad-hoc launch failed at dyld's Team ID validation, as described above.

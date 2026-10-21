@@ -32,6 +32,16 @@ import SQLite3
         #expect(try Data(contentsOf: file) == data)
     }
 
+    @Test func bundledEngineDefaultDoesNotOverrideAnExplicitPreference() throws {
+        let directory = try TestDirectory()
+        let file = directory.file("settings.json")
+        let settings = try Settings.load(from: file, defaultEngineKind: .chromium)
+        #expect(settings.engineKind == .chromium)
+        settings.engineKind = .webkit
+        try settings.save(to: file)
+        #expect(try Settings.load(from: file, defaultEngineKind: .chromium).engineKind == .webkit)
+    }
+
     @Test func invalidSettingsCannotReplaceGoodData() throws {
         let directory = try TestDirectory()
         let file = directory.file("settings.json")

@@ -41,6 +41,9 @@ for arch in "${arches[@]}"; do
   scripts/swiftw build "${build_args[@]}"
   bin="$(scripts/swiftw build "${build_args[@]}" --show-bin-path)"
   binaries+=("$bin/Cairn")
+  if [[ "${CAIRN_WITH_CHROMIUM:-0}" == 1 ]]; then
+    scripts/swiftw build -c "$CONFIGURATION" --arch "$arch" --product CairnHelper
+  fi
 done
 if [[ ${#binaries[@]} -eq 1 ]]; then
   ditto "${binaries[0]}" "$app/Contents/MacOS/Cairn"
@@ -58,7 +61,7 @@ iconutil -c icns "$work/Cairn.iconset" -o "$app/Contents/Resources/Cairn.icns"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 ditto .build/artifacts/sparkle/Sparkle/LICENSE "$app/Contents/Resources/Sparkle-LICENSE"
 if [[ "${CAIRN_WITH_CHROMIUM:-0}" == 1 ]]; then
-  python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION" --arch "$ARCH"
+  python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION" --arch "$ARCH" --helper "$bin/CairnHelper"
   [[ -f engine/entitlements/renderer.plist && -f engine/entitlements/helper.plist ]] || {
     echo "ERROR: Chromium helper entitlements missing" >&2; exit 1;
   }

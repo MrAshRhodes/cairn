@@ -66,5 +66,6 @@ if __name__ == "__main__":
     parser.add_argument("--app", required=True, type=pathlib.Path)
     parser.add_argument("--arch", choices=["arm64", "x86_64"], default=platform.machine())
     parser.add_argument("--configuration", choices=["debug", "release"], default="release")
+    parser.add_argument("--helper", type=pathlib.Path, help="Matching helper from SwiftPM's --show-bin-path")
     args = parser.parse_args()
-    bundle(args.app.resolve(), args.arch, args.configuration)
+    bundle(args.app.resolve(), args.arch, args.configuration, args.helper)

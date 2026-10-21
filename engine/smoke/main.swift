@@ -55,6 +55,46 @@ enum SmokeError: Error { case failed(String) }
         }
     }
 
+    func checkRendering(_ tab: EngineTab) async throws {
+        for _ in 0..<100 {
+            if try await js(tab, "window.renderingProbe?.ready === true") as? Bool == true { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        try require(try await js(tab, "window.renderingProbe?.ready === true") as? Bool == true,
+                    "module script and same-origin fetch complete")
+        guard let major = ProcessInfo.processInfo.environment["CAIRN_SMOKE_CHROMIUM_MAJOR"],
+              Int(major) != nil else { throw SmokeError.failed("Missing expected Chromium major") }
+        try require(try await js(tab, """
+            navigator.userAgent.includes('Chrome/\(major).') &&
+            window.renderingProbe.userAgent === navigator.userAgent
+            """) as? Bool == true, "network and JavaScript expose the locked Chromium browser identity")
+        try require(try await js(tab, """
+            (() => {
+              const grid = document.querySelector('.grid');
+              const a = grid.children[0].getBoundingClientRect();
+              const b = grid.children[1].getBoundingClientRect();
+              return getComputedStyle(grid).display === 'grid' && Math.abs(a.top - b.top) < 1 &&
+                Math.abs(a.width - b.width) < 1 && b.left >= a.right + 15 && a.width > 250;
+            })()
+            """) as? Bool == true, "CSS grid and container query produce two equal desktop columns")
+        try require(try await js(tab, """
+            getComputedStyle(document.querySelector('#interaction-card')).backgroundColor === 'rgb(228, 235, 221)'
+            """) as? Bool == true, "CSS :has selector styles the interactive card")
+        try require(try await js(tab, """
+            document.querySelector('#collect').click(); document.querySelector('#count').value === '1'
+            """) as? Bool == true, "module event handler updates the live DOM")
+        windows[0].setContentSize(NSSize(width: 480, height: 600))
+        try await Task.sleep(for: .milliseconds(150))
+        try require(try await js(tab, """
+            (() => {
+              const cards = document.querySelector('.grid').children;
+              return cards[1].getBoundingClientRect().top >= cards[0].getBoundingClientRect().bottom + 15;
+            })()
+            """) as? Bool == true, "native viewport resize switches the container to stacked cards")
+        windows[0].setContentSize(NSSize(width: 800, height: 600))
+        try await Task.sleep(for: .milliseconds(150))
+    }
+
     func run() async {
         do {
             if let error = engine.initializationError { throw error }
@@ -75,6 +115,7 @@ enum SmokeError: Error { case failed(String) }
             try require(try await js(first, "Promise.resolve(6 * 7)") as? Int == 42, "async JavaScript returns a value")
             try require(first.state.title == "Cairn CEF smoke", "title and navigation state")
             try require(!first.state.isSecure, "HTTP is not marked secure")
+            try await checkRendering(first)
             first.zoom = 1.2
             try require(abs(first.zoom - 1.2) < 0.001, "zoom")
             let found = await withCheckedContinuation { continuation in
@@ -86,6 +127,14 @@ enum SmokeError: Error { case failed(String) }
                 first.takeSnapshot { continuation.resume(returning: $0) }
             }
             try require(image != nil && image!.size.width > 0, "compositor snapshot")
+            guard let tiff = image?.tiffRepresentation,
+                  let bitmap = NSBitmapImageRep(data: tiff),
+                  let png = bitmap.representation(using: .png, properties: [:]),
+                  let snapshot = ProcessInfo.processInfo.environment["CAIRN_SMOKE_SNAPSHOT"] else {
+                throw SmokeError.failed("Could not encode the rendering snapshot")
+            }
+            try require(bitmap.pixelsWide >= 800 && bitmap.pixelsHigh >= 600, "compositor snapshot retains viewport resolution")
+            try png.write(to: URL(fileURLWithPath: snapshot))
             _ = try await js(first, "localStorage.setItem('space', 'first'); document.cookie='space=first; path=/'; true")
             let second = make("second")
             try await load(second)

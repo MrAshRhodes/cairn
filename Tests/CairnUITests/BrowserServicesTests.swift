@@ -9,12 +9,13 @@ import CairnBoosts
 
 @MainActor
 private final class TestEngine: BrowserEngine {
-    let kind: EngineKind = .webkit
+    let kind: EngineKind
     let displayName = "Test engine"
     let versionDescription = "Test 1"
     var tabs: [TestTab] = []
     var clearedProfiles: [String] = []
     var stopped = false
+    init(kind: EngineKind = .webkit) { self.kind = kind }
     func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab {
         let tab = TestTab()
         tab.state.url = initialURL
@@ -55,6 +56,44 @@ private final class TestTab: EngineTab {
 
 @Suite(.serialized) @MainActor
 struct BrowserServicesTests {
+    @Test func freshChromiumBuildSelectsChromiumAndPreservesLaterEngineChoice() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let registry = EngineRegistry()
+        registry.register(.webkit) { TestEngine() }
+        registry.register(.chromium) { TestEngine(kind: .chromium) }
+        let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
+        #expect(services.settings.engineKind == .chromium)
+        #expect(services.model.engine.kind == .chromium)
+        services.settings.engineKind = .webkit
+        try services.flush()
+        services.shutdown()
+
+        let reopened = try BrowserServices.bootstrap(registry: registry, directory: directory)
+        defer { reopened.shutdown() }
+        #expect(reopened.settings.engineKind == .webkit)
+        #expect(reopened.model.engine.kind == .webkit)
+    }
+
+    @Test func webKitBuildReportsUnavailableSavedChromiumWithoutRewritingPreference() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        try Settings(engineKind: .chromium).save(to: file)
+        let registry = EngineRegistry()
+        registry.register(.webkit) { TestEngine() }
+        let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
+        defer { services.shutdown() }
+        #expect(services.model.engine.kind == .webkit)
+        #expect(services.settings.engineKind == .chromium)
+        #expect(services.issues.contains { $0.title == "Engine unavailable" })
+        try services.flush()
+        #expect(try Settings.load(from: file).engineKind == .chromium)
+    }
+
     @Test func newTabAndEditAddressAreDistinct() {
         let model = BrowserModel(engine: TestEngine())
         let services = BrowserServices(model: model)

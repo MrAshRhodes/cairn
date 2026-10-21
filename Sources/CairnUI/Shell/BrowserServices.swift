@@ -75,6 +75,7 @@ public final class BrowserServices {
     public static func bootstrap(registry suppliedRegistry: EngineRegistry? = nil,
                                  directory: URL = WorkspaceStore.defaultDirectory) throws -> BrowserServices {
         let registry = suppliedRegistry ?? .shared
+        let defaultEngineKind: EngineKind = registry.available.contains(.chromium) ? .chromium : .webkit
         var initialIssues: [BrowserIssue] = []
         var directoryWritable = true
         do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
@@ -86,14 +87,14 @@ public final class BrowserServices {
         let settings: Settings
         var settingsWritable = directoryWritable
         if FileManager.default.fileExists(atPath: settingsURL.path) {
-            do { settings = try Settings.load(from: settingsURL) }
+            do { settings = try Settings.load(from: settingsURL, defaultEngineKind: defaultEngineKind) }
             catch {
-                settings = Settings()
+                settings = Settings(engineKind: defaultEngineKind)
                 settingsWritable = false
                 initialIssues.append(.init(title: "Settings could not be read",
                     detail: "\(error.localizedDescription)\nThe original file is preserved. Settings will not be saved this session."))
             }
-        } else { settings = Settings() }
+        } else { settings = Settings(engineKind: defaultEngineKind) }
         guard let engine = registry.make(settings.engineKind) ?? registry.make(.webkit) else {
             throw NSError(domain: "Cairn", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "No browser engine is available. Reinstall a complete Cairn application."

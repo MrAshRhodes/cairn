@@ -5,12 +5,14 @@ import CairnEngineKit
 @MainActor @Observable
 public final class Settings {
     public var searchTemplate = URLResolver.defaultSearchTemplate
-    public var engineKind: EngineKind = .webkit
+    public var engineKind: EngineKind
     /// Zero disables automatic archiving.
     public var autoArchiveAfterHours: Double = 12
     public var restoreSessionOnLaunch = true
     public var sidebarWidth: Double = 260
-    public init() {}
+    public init(engineKind: EngineKind = .webkit) {
+        self.engineKind = engineKind
+    }
 
     private struct Document: Codable {
         var schemaVersion = 1
@@ -31,8 +33,8 @@ public final class Settings {
         }
     }
 
-    public static func load(from url: URL) throws -> Settings {
-        let settings = Settings()
+    public static func load(from url: URL, defaultEngineKind: EngineKind = .webkit) throws -> Settings {
+        let settings = Settings(engineKind: defaultEngineKind)
         guard let data = try JSONStorage.read(url) else { return settings }
         let document = try decode(data)
         settings.searchTemplate = document.searchTemplate

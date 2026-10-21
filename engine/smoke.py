@@ -2,6 +2,7 @@
 """Build and run a local bundled, sandbox-enabled smoke test (requires a macOS GUI session)."""
 import argparse
 import http.server
+import json
 import os
 import pathlib
 import platform
@@ -17,9 +18,14 @@ from tool import ROOT
 
 class Fixture(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        body = b"<!doctype html><title>Cairn CEF smoke</title><body>Find this needle. <a href='/second'>Next</a></body>"
+        content_type = "text/html; charset=utf-8"
+        if self.path == "/probe.json":
+            body = json.dumps({"userAgent": self.headers.get("User-Agent", "")}).encode()
+            content_type = "application/json"
+        else:
+            body = (ROOT / "engine/fixtures/rendering.html").read_bytes()
         self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -73,6 +79,8 @@ def main():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     env["CAIRN_SMOKE_DATA_ROOT"] = str(work / "profiles")
+    env["CAIRN_SMOKE_SNAPSHOT"] = str(work / "rendering.png")
+    env["CAIRN_SMOKE_CHROMIUM_MAJOR"] = json.loads((ROOT / "engine/cef.lock.json").read_text())["chromium_version"].split(".")[0]
     env["CAIRN_SMOKE_URL"] = f"http://127.0.0.1:{server.server_port}/"
     print(f"Smoke bundle and diagnostic logs: {work}", flush=True)
     try:

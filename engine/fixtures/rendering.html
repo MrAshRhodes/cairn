@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cairn CEF smoke</title>
+<style>
+  :root { color-scheme: light; font-family: "Avenir Next", sans-serif; color: #243d35; background: #f4f1e9; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { max-width: 1000px; margin: auto; padding: 28px 36px; container-type: inline-size; }
+  header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 24px; border-bottom: 1px solid #c8cec1; }
+  .wordmark { font-weight: 700; font-size: 19px; letter-spacing: -.6px; }
+  .eyebrow { font-size: 10px; text-transform: uppercase; letter-spacing: 2px; }
+  h1 { font: 48px/1.05 "Iowan Old Style", Georgia, serif; letter-spacing: -1.5px; max-width: 500px; margin: 26px 0 16px; }
+  .intro { max-width: 440px; line-height: 1.6; font-size: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr; gap: 16px; margin: 24px 0; }
+  .card { padding: 20px; min-height: 140px; border: 1px solid #c8cec1; border-radius: 16px; background: #fffdf7; }
+  .card:has(output) { border-color: #537663; background: #e4ebdd; }
+  h2 { font-size: 16px; margin: 0 0 10px; }
+  p { margin: 0 0 12px; }
+  button { border: 0; border-radius: 100px; padding: 10px 17px; background: #243d35; color: #fffdf7; font: inherit; font-size: 12px; cursor: pointer; }
+  button:focus-visible, a:focus-visible { outline: 3px solid #bd592d; outline-offset: 4px; }
+  button:hover { background: #40624e; }
+  output { display: inline-block; min-width: 24px; margin-left: 12px; font-variant-numeric: tabular-nums; }
+  footer { display: flex; justify-content: space-between; font-size: 11px; }
+  a { color: inherit; text-underline-offset: 3px; }
+  @container (min-width: 560px) { .grid { grid-template-columns: 1fr 1fr; } }
+</style>
+<main>
+  <header><span class="wordmark">Fieldnotes.</span><span class="eyebrow">A little room to explore</span></header>
+  <h1>Follow your curiosity.<br>Keep the good bits.</h1>
+  <p class="intro">A local field guide for the open web. Modern layouts, small interactions, and space for your next idea.</p>
+  <section class="grid" aria-label="Browser rendering checks">
+    <article class="card" id="layout-card">
+      <h2>Room to think</h2>
+      <p class="intro">These cards respond to their container, not just the window.</p>
+      <span class="eyebrow">CSS grid + container queries</span>
+    </article>
+    <article class="card" id="interaction-card">
+      <h2>Made to interact</h2>
+      <p class="intro">A real JavaScript module, running in the browser.</p>
+      <button id="collect" type="button">Collect a thought</button><output id="count" aria-live="polite">0</output>
+    </article>
+  </section>
+  <footer><span id="status" role="status">Loading the local module...</span><a href="/second">Find the next needle</a></footer>
+</main>
+<script type="module">
+  try {
+    const response = await fetch("/probe.json");
+    if (!response.ok) throw new Error(`Probe returned ${response.status}`);
+    const probe = await response.json();
+    document.querySelector("#collect").addEventListener("click", () => {
+      const output = document.querySelector("#count");
+      output.value = String(Number(output.value) + 1);
+    });
+    document.querySelector("#status").textContent = "Module loaded. All content stays on this Mac.";
+    window.renderingProbe = { userAgent: probe.userAgent, ready: true };
+  } catch (error) {
+    document.querySelector("#status").textContent = `Module failed: ${error.message}`;
+    window.renderingProbe = { error: error.message };
+  }
+</script>
+</html>
