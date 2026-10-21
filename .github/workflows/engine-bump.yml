@@ -1,0 +1,91 @@
+name: Chromium maintenance
+
+on:
+  schedule:
+    - cron: '23 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chromium-maintenance
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      update: ${{ steps.check.outputs.update }}
+      gap: ${{ steps.check.outputs.gap }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Offline updater tests
+        run: python3 -m unittest discover -s engine/tests -v
+      - name: Compare stable CEF and Chrome
+        id: check
+        run: |
+          mkdir -p engine/.cache
+          python3 engine/tool.py check --report engine/.cache/status.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          report = json.loads(Path("engine/.cache/status.json").read_text())
+          with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+              output.write(f"update={str(report['update_available']).lower()}\n")
+              output.write(f"gap={str(report['security_gap']).lower()}\n")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              summary.write("## Chromium security monitor\n```json\n" + json.dumps(report, indent=2) + "\n```\n")
+          if report["security_gap"]:
+              print("::warning::SECURITY GAP: CEF is behind Chrome stable. See summary; do not describe this engine as current Chrome.")
+          PY
+
+  propose:
+    needs: check
+    if: needs.check.outputs.update == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Pin latest common stable build
+        run: python3 engine/tool.py update
+      - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        with:
+          branch: maintenance/cef-stable
+          title: 'Update pinned CEF stable (manual security review required)'
+          commit-message: 'Update pinned CEF stable archives'
+          add-paths: engine/cef.lock.json
+          draft: always-true
+          body: |
+            The stable CEF archive pin changed for both macOS architectures.
+            This is NOT proof of Chrome security parity. Review the Chromium maintenance run summary.
+            No automatic merge is configured.
+
+            Required before approval:
+            - Review upstream CEF/Chromium security notes and remaining version gap.
+            - Fetch and checksum-verify both archives; review SHA-256 additions if used.
+            - Rebuild the wrapper, bridge, and all helpers on both architectures.
+            - Run engine offline tests and the bundled sandbox smoke test.
+            - Manually verify certificates, profile isolation, private browsing, navigation,
+              popup blocking, downloads, scripts, find, snapshots, close, and upgrade rollback.
+            - Sign and notarize the complete app, retaining the Chromium sandbox.
+            See docs/UPDATING_CHROMIUM.md.
+
+  security-gap:
+    needs: check
+    if: needs.check.outputs.gap == 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require maintainer attention
+        run: |
+          echo "::error::SECURITY GAP remains in the pinned Chromium engine. WebKit is the default; review the maintenance summary."
+          exit 1
