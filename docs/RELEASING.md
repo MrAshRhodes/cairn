@@ -71,8 +71,8 @@ key: installed clients trust the existing public key. Until provisioning is
 approved, scheduled product releases stop with an explicit error; local
 Keychain-native signing remains available.
 
-The Homebrew tap independently checks the published release and opens a cask
-update for review. The product site deploys from `site/` using the Product site
+The Homebrew tap independently checks published releases and updates its cask
+only after verifying the release artifacts. The product site deploys from `site/` using the Product site
 workflow; site-only changes never create a browser release.
 
 ## Local development (no Apple account)
