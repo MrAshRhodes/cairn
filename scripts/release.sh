@@ -2,10 +2,14 @@
 set +x
 set -euo pipefail
 cd "$(dirname "$0")/.."
-[[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" && -n "${SPARKLE_PRIVATE_ED_KEY:-}" ]] || {
-  echo "ERROR: release requires SPARKLE_PUBLIC_ED_KEY and SPARKLE_PRIVATE_ED_KEY." >&2; exit 1;
+[[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]] || {
+  echo "ERROR: release requires SPARKLE_PUBLIC_ED_KEY." >&2; exit 1;
 }
-python3 Resources/ReleaseTools/validate-key.py
+scripts/sparkle-release-signing.sh validate-input
+if [[ ! -x .build/artifacts/sparkle/Sparkle/bin/sign_update ]]; then
+  scripts/swiftw package resolve
+fi
+scripts/sparkle-release-signing.sh check-key
 export VERSION="${VERSION:?Set VERSION to the numeric release version, e.g. 0.1.0}"
 export BUILD_NUMBER="${BUILD_NUMBER:-$VERSION}" ARCH="${ARCH:-universal}" CONFIGURATION=release
 export SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"

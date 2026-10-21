@@ -113,28 +113,19 @@ tool's private-key export option or copy private material into shell history.
 
 ### Build and authenticate the local preview
 
-The subshell below looks up the existing public key, checks it against the designated
-v0.1.0 key, then captures the private value directly into an environment variable.
-The private value is Sparkle's canonical base64 secret (a 32-byte seed for new keys);
-it is not a PEM file. Shell tracing is disabled before any lookup. Nothing in this
-recipe prints or uploads the private value, and the environment disappears when the
-subshell exits.
+Use **Keychain-native signing** for local publication. Set the account name and the
+known public key; do not export private material from Keychain. The release script
+calls the official `sign_update --account` tool for the archive and feed, and uses
+the same account for feed verification. Neither `generate_keys -p` nor a raw Keychain
+password lookup is needed during a release.
 
 ```bash
 (
   set +x
   set -euo pipefail
-  tools=.build/artifacts/sparkle/Sparkle/bin
-  account=io.github.mrashrhodes.cairn
-
-  SPARKLE_PUBLIC_ED_KEY="$("$tools/generate_keys" --account "$account" -p)"
-  [[ "$SPARKLE_PUBLIC_ED_KEY" == 'ugn8YkRCxDuzUN63cb+sFMayO6As26BL/1FBbbUs9a8=' ]] || {
-    echo 'Wrong public key: stop and recover the designated Cairn Keychain item.' >&2
-    exit 1
-  }
-  SPARKLE_PRIVATE_ED_KEY="$(security find-generic-password \
-    -s https://sparkle-project.org -a "$account" -w)"
-  export SPARKLE_PUBLIC_ED_KEY SPARKLE_PRIVATE_ED_KEY
+  unset SPARKLE_PRIVATE_ED_KEY
+  export SPARKLE_KEYCHAIN_ACCOUNT=io.github.mrashrhodes.cairn
+  export SPARKLE_PUBLIC_ED_KEY='ugn8YkRCxDuzUN63cb+sFMayO6As26BL/1FBbbUs9a8='
 
   # Explicitly select the ad-hoc, non-notarized WebKit developer-preview path.
   unset APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
@@ -142,24 +133,45 @@ subshell exits.
   CAIRN_WITH_CHROMIUM=0 SIGNING_IDENTITY=- \
     VERSION=0.1.0 BUILD_NUMBER=0.1.0 ARCH=universal scripts/release.sh
 
-  "$tools/sign_update" --account "$account" --verify dist/release/appcast.xml
+  scripts/sparkle-release-signing.sh verify-feed dist/release/appcast.xml
   swift Resources/ReleaseTools/VerifySignature.swift --feed \
     "$SPARKLE_PUBLIC_ED_KEY" dist/release/appcast.xml
 )
 ```
 
-Do not run the `security ... -w` lookup by itself: that would print the private
-value. Do not use `echo`, `tee`, shell tracing, an argument such as `--body`, or a
-file redirect to expose or persist it. Do not add a `gh secret set` step.
+Before tests or compilation, the script signs an empty, nonsecret probe and verifies
+its signature against `SPARKLE_PUBLIC_ED_KEY` with CryptoKit. A missing/denied Keychain
+item, a signer failure, or a mismatched public key stops the release before building.
+If the resolved Sparkle tools are absent, dependency resolution runs first; it does
+not build or sign an app. The probe is removed afterward.
+
+macOS may still ask for permission for the official Sparkle signer to access its
+Keychain item. Allow access only to the expected signer. If access is blocked, unlock
+the appropriate Keychain or cancel and resolve its access controls; do not work around
+it by exporting the secret. There is no automatic fallback to a different account,
+unsigned output, or raw password extraction.
+
+Do not use `echo`, `tee`, shell tracing, an argument such as `--body`, or a file
+redirect to expose or persist private material. Do not add a `gh secret set` step.
 
 The release script runs tests, builds, creates a ZIP and DMG, and signs the ZIP and
-appcast with Sparkle 2.10's resolved `sign_update` tool. Private material reaches the
-signer through **stdin**, never a command-line argument or file. CryptoKit verifies
+appcast with Sparkle 2.10's resolved `sign_update` tool. In Keychain-native mode, only
+the official signer accesses the private item; the shell never receives it. CryptoKit verifies
 the actual ZIP and feed signatures against the public key embedded in the app,
 rejecting mismatched key pairs; Sparkle also verifies the signed feed. These are
 real-key checks, not the public test-vector checks in the tooling test suite.
 No deltas or remote release-note content are emitted. The archive's Info.plist must
 match the supplied app.
+
+For a signing-only access check without building an application, use the same public
+key/account environment and run `scripts/sparkle-release-signing.sh check-key`.
+`scripts/make-appcast.sh` accepts the same account mode for already-prepared archives.
+
+The existing CI interface remains supported for a future explicit provisioning
+decision: set `SPARKLE_PRIVATE_ED_KEY` to Sparkle's canonical base64 secret and leave
+`SPARKLE_KEYCHAIN_ACCOUNT` unset. Only that mode passes the private value to the signer
+through stdin. Setting both modes, or neither, is an error. The local publication path
+does not use the environment-key mode and does not upload private material to CI.
 
 Output: `dist/Cairn.app`, `dist/release/Cairn-0.1.0-universal.zip`,
 `dist/release/Cairn-0.1.0-universal.dmg`, `appcast.xml`, `SHA256SUMS`,
@@ -309,7 +321,11 @@ release workflow intentionally builds WebKit only until the engine is release-re
 
 `scripts/test-release.sh` exercises the real updater's fail-closed configuration,
 validates a public RFC 8032 signature and rejects tampering without generating private
-keys. A real local ad-hoc app/DMG and linkage can be verified without Apple credentials.
+keys. Signing-mode regression tests use an isolated fake external signer and real
+CryptoKit public-signature verification; they never access the user's Keychain or sign
+a live app. They cover both modes, ambiguous/missing credentials, inaccessible keys,
+key mismatches before building, and suppressed signer diagnostics.
+A real local ad-hoc app/DMG and linkage can be verified without Apple credentials.
 End-to-end update installation requires a real key, two increasing app versions and an
 accessible feed; Apple signing/notarization requires your account. Test those before
 broad distribution. The v0.1.0 developer preview has not yet had its integrated GUI
