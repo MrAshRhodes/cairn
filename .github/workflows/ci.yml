@@ -1,0 +1,44 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Show toolchain
+        run: swift --version
+      - name: Install missing validation tools
+        run: |
+          command -v shellcheck >/dev/null || brew install shellcheck
+          command -v actionlint >/dev/null || brew install actionlint
+      - name: Validate workflows and release tooling
+        run: |
+          actionlint
+          scripts/test-release.sh
+      - name: Test
+        run: scripts/swiftw test
+      - name: Package ad-hoc app and disk image
+        run: |
+          scripts/bundle-app.sh
+          scripts/make-dmg.sh
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cairn-development-${{ matrix.runner }}
+          path: dist/*.dmg
+          if-no-files-found: error
+          retention-days: 7
