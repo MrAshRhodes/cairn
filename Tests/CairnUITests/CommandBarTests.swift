@@ -5,6 +5,25 @@ import CairnModules
 @testable import CairnUI
 
 @Suite struct CommandBarTests {
+    @Test func searchesCustomAndPageTitlesWhileDisplayingTheCustomName() throws {
+        var tab = TabItem(url: URL(string: "https://swift.org/documentation"), title: "The Swift Book")
+        tab.customTitle = "My language reference"
+        var favorite = TabItem(url: URL(string: "https://example.com"), title: "Latest release")
+        favorite.customTitle = "Saved favorite"
+        let workspace = Workspace(spaces: [Space(name: "Learning", tabs: [tab])], favorites: [favorite])
+
+        for query in ["language reference", "swift book", "Learning language"] {
+            let match = try #require(CommandBarSearch.matches(query: query, workspace: workspace, commands: [])
+                .first(where: { $0.id == "tab:\(tab.id)" }))
+            #expect(match.title == "My language reference")
+        }
+        for query in ["saved favorite", "latest release"] {
+            let match = try #require(CommandBarSearch.matches(query: query, workspace: workspace, commands: [])
+                .first(where: { $0.id == "tab:\(favorite.id)" }))
+            #expect(match.title == "Saved favorite")
+        }
+    }
+
     @Test func searchesTitlesHostsSpacesAndFavorites() {
         let tab = TabItem(url: URL(string: "https://swift.org/documentation"), title: "The Swift Book")
         let favorite = TabItem(url: URL(string: "https://example.com"), title: "Reference")

@@ -28,7 +28,7 @@ public enum CommandBarSearch {
             let groups: [(String, [TabItem])] = [("Favorites", workspace.favorites)] +
                 workspace.spaces.map { ($0.name, $0.pinned + $0.tabs) }
             for (group, tabs) in groups {
-                for tab in tabs where contains([tab.displayTitle, tab.url?.absoluteString ?? "", group]) {
+                for tab in tabs where contains([tab.displayTitle, tab.title, tab.url?.absoluteString ?? "", group]) {
                     results.append(.init(id: "tab:\(tab.id)", title: tab.displayTitle, subtitle: group + " · " + (tab.url?.host ?? "New Tab"),
                                          symbol: "rectangle.on.rectangle", shortcut: nil, target: .tab(tab.id)))
                 }

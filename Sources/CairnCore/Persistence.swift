@@ -83,7 +83,9 @@ extension Workspace {
         func validateTabs(_ tabs: [TabItem]) throws {
             for tab in tabs {
                 guard ids.insert(tab.id).inserted else { throw ServiceError.invalidData("Duplicate tab identifiers.") }
-                guard tab.title.count <= 32_768, tab.createdAt.timeIntervalSince1970.isFinite,
+                guard tab.title.count <= TabItem.maximumTitleLength,
+                      (tab.customTitle?.count ?? 0) <= TabItem.maximumTitleLength,
+                      tab.createdAt.timeIntervalSince1970.isFinite,
                       tab.lastActiveAt.timeIntervalSince1970.isFinite else {
                     throw ServiceError.invalidData("Invalid tab metadata.")
                 }

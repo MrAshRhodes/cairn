@@ -25,6 +25,7 @@ struct ArchiveView: View {
     @Environment(\.dismiss) private var dismiss
     private var tabs: [TabItem] {
         model.selectedSpace.archive.filter { search.isEmpty || $0.displayTitle.localizedCaseInsensitiveContains(search) ||
+            $0.title.localizedCaseInsensitiveContains(search) ||
             ($0.url?.absoluteString.localizedCaseInsensitiveContains(search) ?? false) }
     }
     var body: some View {

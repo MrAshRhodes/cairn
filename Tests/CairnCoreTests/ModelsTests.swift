@@ -62,3 +62,42 @@ import Foundation
         #expect(back.spaces == ws.spaces)
     }
 }
+
+@Suite struct TabTitleTests {
+    @Test func olderTabsDecodeWithoutCustomTitleAndKeepExistingFallbacks() throws {
+        let data = Data("""
+        {"id":"00000000-0000-0000-0000-000000000001","url":"https://example.com",
+         "title":"Legacy page","homeURL":null,"createdAt":0,"lastActiveAt":0}
+        """.utf8)
+        var tab = try JSONDecoder().decode(TabItem.self, from: data)
+        #expect(tab.customTitle == nil)
+        #expect(tab.displayTitle == "Legacy page")
+        tab.title = ""
+        #expect(tab.displayTitle == "example.com")
+        tab.url = nil
+        #expect(tab.displayTitle == "New Tab")
+    }
+
+    @Test func customTitleRoundTripsSeparatelyFromPageTitle() throws {
+        var tab = TabItem(url: URL(string: "https://example.com"), title: "Page title")
+        tab.customTitle = "My saved title"
+        let workspace = Workspace(spaces: [Space(name: "Home", tabs: [tab])])
+        let restored = try JSONDecoder().decode(Workspace.self, from: JSONEncoder().encode(workspace))
+        try restored.validate()
+        #expect(restored.schemaVersion == 1)
+        #expect(restored.spaces[0].tabs[0].customTitle == "My saved title")
+        #expect(restored.spaces[0].tabs[0].title == "Page title")
+        #expect(restored.spaces[0].tabs[0].displayTitle == "My saved title")
+    }
+
+    @Test func workspaceValidatesBothTitleLengths() throws {
+        var tab = TabItem(title: String(repeating: "p", count: TabItem.maximumTitleLength))
+        tab.customTitle = String(repeating: "n", count: TabItem.maximumTitleLength)
+        try Workspace(spaces: [Space(name: "Home", tabs: [tab])]).validate()
+        tab.customTitle?.append("n")
+        #expect(throws: (any Error).self) { try Workspace(spaces: [Space(name: "Home", tabs: [tab])]).validate() }
+        tab.customTitle = nil
+        tab.title.append("p")
+        #expect(throws: (any Error).self) { try Workspace(spaces: [Space(name: "Home", tabs: [tab])]).validate() }
+    }
+}

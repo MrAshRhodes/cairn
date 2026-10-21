@@ -11,9 +11,13 @@ public enum TabList: String, Codable, Sendable {
 }
 
 public struct TabItem: Codable, Identifiable, Hashable, Sendable {
+    public static let maximumTitleLength = 32_768
     public var id: UUID
     public var url: URL?
+    /// The latest page title, independent of a user-supplied tab name.
     public var title: String
+    /// Missing in older workspaces; nil follows the page title.
+    public var customTitle: String?
     /// For pinned/favorite tabs: the URL "reset" returns to.
     public var homeURL: URL?
     public var createdAt: Date
@@ -21,9 +25,11 @@ public struct TabItem: Codable, Identifiable, Hashable, Sendable {
     public init(id: UUID = UUID(), url: URL? = nil, title: String = "", homeURL: URL? = nil,
                 createdAt: Date = Date(), lastActiveAt: Date = Date()) {
         self.id = id; self.url = url; self.title = title; self.homeURL = homeURL
+        self.customTitle = nil
         self.createdAt = createdAt; self.lastActiveAt = lastActiveAt
     }
     public var displayTitle: String {
+        if let customTitle, !customTitle.isEmpty { return customTitle }
         if !title.isEmpty { return title }
         return url?.host ?? "New Tab"
     }

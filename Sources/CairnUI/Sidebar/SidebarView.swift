@@ -221,6 +221,7 @@ public struct SidebarView: View {
         else { Button("Add to Favorites") { model.favorite(tab.id) } }
         if let home = tab.homeURL { Button("Reset to Saved Address") { model.load(home, in: tab.id) } }
         Button("Rename…") { tabTitle = tab.displayTitle; renamingTab = tab }
+        if tab.customTitle != nil { Button("Use Page Title") { model.renameTab(tab.id, title: nil) } }
         Menu("Move to Space") {
             ForEach(model.workspace.spaces) { space in
                 Button(space.name) { model.moveTab(tab.id, to: list == .pinned ? .pinned : .today, in: space.id) }
@@ -254,22 +255,8 @@ public struct SidebarView: View {
         model.moveTab(id, to: location.list, at: location.index + delta)
     }
     private func renameTab() {
-        guard let tab = renamingTab, let location = model.locate(tab.id) else { return }
-        let title = tabTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-        if location.list == .favorites {
-            // The model exposes a mutable workspace; invoke its persistence hook for global metadata.
-            model.workspace.favorites[location.index].title = title
-            model.onChange?()
-        } else if let index = location.spaceIndex {
-            model.updateSpace(model.workspace.spaces[index].id) { space in
-                switch location.list {
-                case .pinned: space.pinned[location.index].title = title
-                case .today: space.tabs[location.index].title = title
-                case .archive: space.archive[location.index].title = title
-                case .favorites: break
-                }
-            }
-        }
+        guard let tab = renamingTab else { return }
+        model.renameTab(tab.id, title: tabTitle)
     }
 }
 
