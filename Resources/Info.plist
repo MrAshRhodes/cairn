@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>io.github.mrashrhodes.cairn</string>
+    <key>CFBundleName</key><string>Cairn</string>
+    <key>CFBundleDisplayName</key><string>Cairn</string>
+    <key>CFBundleExecutable</key><string>Cairn</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleShortVersionString</key><string>@CAIRN_VERSION@</string>
+    <key>CFBundleVersion</key><string>@CAIRN_BUILD_NUMBER@</string>
+    <key>CFBundleIconFile</key><string>Cairn</string>
+    <key>LSMinimumSystemVersion</key><string>14.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>NSCameraUsageDescription</key><string>Allow a website you choose to use your camera.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Allow a website you choose to use your microphone.</string>
+    <key>NSAppTransportSecurity</key>
+    <dict><key>NSAllowsArbitraryLoadsInWebContent</key><true/></dict>
+    <key>CFBundleURLTypes</key>
+    <array><dict>
+        <key>CFBundleURLName</key><string>Web address</string>
+        <key>CFBundleTypeRole</key><string>Viewer</string>
+        <key>CFBundleURLSchemes</key><array><string>http</string><string>https</string></array>
+    </dict></array>
+    <key>CFBundleDocumentTypes</key>
+    <array><dict>
+        <key>CFBundleTypeName</key><string>Web page</string>
+        <key>CFBundleTypeRole</key><string>Viewer</string>
+        <key>LSHandlerRank</key><string>Alternate</string>
+        <key>LSItemContentTypes</key>
+        <array><string>public.html</string><string>public.xhtml</string></array>
+    </dict></array>
+    <key>SUFeedURL</key><string>https://github.com/mrashrhodes/cairn/releases/latest/download/appcast.xml</string>
+    <key>SUPublicEDKey</key><string>@SPARKLE_PUBLIC_ED_KEY@</string>
+    <key>SUVerifyUpdateBeforeExtraction</key><true/>
+    <key>SURequireSignedFeed</key><true/>
+    <key>SUSignedFeedFailureExpirationInterval</key><integer>0</integer>
+    <key>SUEnableAutomaticChecks</key><false/>
+    <key>SUAutomaticallyUpdate</key><false/>
+    <key>SUEnableSystemProfiling</key><false/>
+    <key>SUEnableJavaScript</key><false/>
+</dict>
+</plist>
