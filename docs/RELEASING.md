@@ -165,8 +165,11 @@ been fetched/built following `engine/` documentation:
 CAIRN_WITH_CHROMIUM=1 ARCH=arm64 scripts/bundle-app.sh
 ```
 
-The script requires and calls `python3 engine/bundle.py --app APP --configuration release`
-after the native executable is built, before signing. Missing engine packaging fails;
+The script sets `CAIRN_CEF_ARCH` from `ARCH` for the gated SwiftPM manifest and calls
+`python3 engine/bundle.py --app APP --configuration release --arch ARCH`
+after the native executable is built, before signing. Fetch and build the matching
+engine architecture first (including its required pin markers), following
+`docs/UPDATING_CHROMIUM.md`. Missing engine packaging fails;
 there is no placeholder or WebKit masquerading as Chromium. The hook must include real
 CEF frameworks, resources, architecture-matched helpers, notices and helper entitlements.
 Renderer and GPU helpers receive `engine/entitlements/renderer.plist`; other helpers

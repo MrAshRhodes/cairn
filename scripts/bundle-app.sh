@@ -15,7 +15,11 @@ esac
 case "$CONFIGURATION" in debug|release) ;; *) echo "Invalid CONFIGURATION" >&2; exit 1 ;; esac
 case "${CAIRN_WITH_CHROMIUM:-0}" in
   0) ;;
-  1) [[ -f engine/bundle.py ]] || { echo "ERROR: optional Chromium bundler is not installed" >&2; exit 1; } ;;
+  1)
+    [[ "$ARCH" != universal ]] || { echo "ERROR: Chromium packaging requires a single architecture" >&2; exit 1; }
+    [[ -f engine/bundle.py ]] || { echo "ERROR: optional Chromium bundler is not installed" >&2; exit 1; }
+    export CAIRN_CEF_ARCH="$ARCH"
+    ;;
   *) echo "CAIRN_WITH_CHROMIUM must be 0 or 1" >&2; exit 1 ;;
 esac
 if [[ "$SIGNING_IDENTITY" != "-" && "$SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
@@ -54,7 +58,7 @@ iconutil -c icns "$work/Cairn.iconset" -o "$app/Contents/Resources/Cairn.icns"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 ditto .build/artifacts/sparkle/Sparkle/LICENSE "$app/Contents/Resources/Sparkle-LICENSE"
 if [[ "${CAIRN_WITH_CHROMIUM:-0}" == 1 ]]; then
-  python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION"
+  python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION" --arch "$ARCH"
   [[ -f engine/entitlements/renderer.plist && -f engine/entitlements/helper.plist ]] || {
     echo "ERROR: Chromium helper entitlements missing" >&2; exit 1;
   }
