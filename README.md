@@ -21,10 +21,24 @@ make test
 make app
 ```
 
-Use the generated application bundle for normal use. A development build is
+The generated application bundle is `dist/Cairn.app`. A development build is
 ad-hoc signed unless you configure your own Developer ID signing. Ad-hoc signing
 is not notarization; see the [release guide](docs/RELEASING.md) before distributing
 downloads.
+
+## Developer preview status
+
+The initial release uses system WebKit and includes native Spaces, vertical tabs,
+favorites and pins, session restoration and archiving, command search, split
+browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
+explicit trust decision. Authenticated WebKit downloads use a native save dialog
+and are separate from the URL-only download list.
+
+Automated tests cover the integrated services and real WebKit behavior, including
+profile isolation and authenticated downloads. The optional arm64 CEF application
+also compiles. Interactive GUI and VoiceOver checks, Intel runtime testing, Apple
+Developer ID signing, and notarization are **not yet verified**. This is a developer
+preview, not a production-readiness claim.
 
 The build wrapper handles the Command Line Tools-only SwiftPM/Swift Testing
 configuration. It does not install or change your system toolchain.
