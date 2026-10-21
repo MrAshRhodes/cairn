@@ -15,3 +15,9 @@ engine/.cache/
 sparkle_*private*
 .env
 .env.*
+# Local analysis and browsing state do not belong in the public repository.
+analysis/
+*.har
+*.saz
+*.dmp
+*.trace

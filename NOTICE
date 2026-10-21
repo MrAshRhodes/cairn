@@ -1,0 +1,16 @@
+Cairn
+Copyright 2026 Cairn contributors
+
+Original Cairn source is distributed under the Apache License, Version 2.0.
+
+Third-party components are licensed separately:
+- Sparkle: upstream permissive license and bundled notices. See
+  https://github.com/sparkle-project/Sparkle/blob/2.x/LICENSE
+- Optional Chromium Embedded Framework and Chromium: their upstream BSD-style
+  licenses and third-party notices. Redistributed builds must retain all notices
+  supplied with the selected CEF distribution.
+- Apple frameworks, including WebKit, are system components under Apple's terms;
+  they are not relicensed or redistributed as Cairn source.
+
+Arc is a third-party trademark. Cairn is not affiliated with, endorsed by, or
+derived from proprietary source code belonging to The Browser Company.
