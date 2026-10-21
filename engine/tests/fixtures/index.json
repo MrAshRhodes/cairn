@@ -1,0 +1,28 @@
+{
+  "macosarm64": {
+    "versions": [
+      {
+        "cef_version": "156.0.7+g47dbc1d+chromium-156.0.8078.17",
+        "chromium_version": "156.0.8078.17",
+        "channel": "beta",
+        "files": [{"type": "minimal", "name": "beta", "sha1": "0000000000000000000000000000000000000000", "size": 1}]
+      },
+      {
+        "cef_version": "154.0.34+g14c5a08+chromium-154.0.8037.98",
+        "chromium_version": "154.0.8037.98",
+        "channel": "stable",
+        "files": [{"type": "minimal", "name": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosarm64_minimal.tar.bz2", "sha1": "b7081f6609e5edccf07be96b5d7977329fbe1bdf", "size": 132210884}]
+      }
+    ]
+  },
+  "macosx64": {
+    "versions": [
+      {
+        "cef_version": "154.0.34+g14c5a08+chromium-154.0.8037.98",
+        "chromium_version": "154.0.8037.98",
+        "channel": "stable",
+        "files": [{"type": "minimal", "name": "cef_binary_154.0.34+g14c5a08+chromium-154.0.8037.98_macosx64_minimal.tar.bz2", "sha1": "51d90349e24360b8e0daecc2d026ad150c620db5", "size": 138623289}]
+      }
+    ]
+  }
+}
