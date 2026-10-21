@@ -28,7 +28,7 @@ downloads.
 
 ## Developer preview status
 
-The initial release uses system WebKit and includes native Spaces, vertical tabs,
+The current implementation uses system WebKit and includes native Spaces, vertical tabs,
 favorites and pins, session restoration and archiving, command search, split
 browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
 explicit trust decision. Authenticated WebKit downloads use a native save dialog
@@ -36,9 +36,13 @@ and are separate from the URL-only download list.
 
 Automated tests cover the integrated services and real WebKit behavior, including
 profile isolation and authenticated downloads. The optional arm64 CEF application
-also compiles. Interactive GUI and VoiceOver checks, Intel runtime testing, Apple
-Developer ID signing, and notarization are **not yet verified**. This is a developer
-preview, not a production-readiness claim.
+also compiles. Interactive GUI and VoiceOver checks, Intel CEF runtime testing,
+Apple Developer ID signing, and notarization are **not yet verified**. This is a
+developer preview, not a production-readiness claim.
+
+A signed, auto-updatable download is not published yet. Build from source for now;
+local release signing still requires the maintainer's macOS Keychain approval.
+Private update-signing material is not uploaded to GitHub.
 
 The build wrapper handles the Command Line Tools-only SwiftPM/Swift Testing
 configuration. It does not install or change your system toolchain.
