@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "boosts": [
+    {
+      "id": "a0176480-2d1a-4cea-9702-499c4ca4b101",
+      "name": "Readable Example",
+      "hostPatterns": ["example.com"],
+      "css": "body { font-family: system-ui, sans-serif; line-height: 1.65; } p { max-width: 70ch; }",
+      "js": "",
+      "isEnabled": true
+    }
+  ]
+}
