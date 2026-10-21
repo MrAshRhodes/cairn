@@ -52,6 +52,102 @@ private final class FakeTab: EngineTab {
 }
 
 @Suite @MainActor struct BrowserModelTests {
+    @Test(arguments: ["a", "👩🏽‍💻"])
+    func oversizedEngineTitlesRemainSaveable(glyph: String) throws {
+        let directory = try TestDirectory()
+        let store = WorkspaceStore(directory: directory.url, debounce: .seconds(60))
+        let model = BrowserModel(engine: FakeEngine())
+        let url = URL(string: "https://example.com")!
+        let id = model.newTab(url: url)
+        let tab = try #require(model.liveTabs[id] as? FakeTab)
+        try store.saveNow(model.workspace)
+        model.onChange = { [weak model] in
+            if let model { store.scheduleSave(model.workspace) }
+        }
+
+        tab.emit(EngineTabState(url: url, title: String(repeating: glyph, count: 32_769), progress: 1))
+
+        #expect(model.item(id)?.title.count == 32_768)
+        #expect(model.tabStates[id]?.title.count == 32_768)
+        try store.flush()
+        #expect(try store.load()?.spaces[0].tabs[0].title.count == 32_768)
+        model.moveTab(id, to: .archive)
+        try store.flush()
+        #expect(try store.load()?.spaces[0].archive[0].title.count == 32_768)
+    }
+
+    @Test func customTitleSurvivesPageUpdatesArchiveAndSessionRestore() throws {
+        let directory = try TestDirectory()
+        let store = WorkspaceStore(directory: directory.url)
+        let model = BrowserModel(engine: FakeEngine())
+        let url = URL(string: "https://example.com")!
+        let id = model.newTab(url: url)
+        let tab = try #require(model.liveTabs[id] as? FakeTab)
+        tab.emit(EngineTabState(url: url, title: "Original page", progress: 1))
+        model.renameTab(id, title: "  My reference  ")
+        var committedTitle: String?
+        model.onNavigationCommitted = { _, title in committedTitle = title }
+
+        tab.load(url)
+        tab.emit(EngineTabState(url: url, title: "Updated page", progress: 1))
+        #expect(model.item(id)?.customTitle == "My reference")
+        #expect(model.item(id)?.displayTitle == "My reference")
+        #expect(model.item(id)?.title == "Updated page")
+        #expect(committedTitle == "Updated page")
+
+        model.moveTab(id, to: .archive)
+        try store.saveNow(model.workspace)
+        let restored = BrowserModel(engine: FakeEngine(), workspace: try #require(try store.load()))
+        #expect(restored.item(id)?.displayTitle == "My reference")
+        restored.select(id)
+        let restoredTab = try #require(restored.liveTabs[id] as? FakeTab)
+        restoredTab.emit(EngineTabState(url: url, title: "Restored page", progress: 1))
+        #expect(restored.item(id)?.customTitle == "My reference")
+        #expect(restored.item(id)?.displayTitle == "My reference")
+        #expect(restored.item(id)?.title == "Restored page")
+        try store.saveNow(restored.workspace)
+        #expect(try store.load()?.spaces[0].tabs[0].customTitle == "My reference")
+
+        restored.renameTab(id, title: nil)
+        #expect(restored.item(id)?.customTitle == nil)
+        #expect(restored.item(id)?.displayTitle == "Restored page")
+        try store.saveNow(restored.workspace)
+        #expect(try store.load()?.spaces[0].tabs[0].customTitle == nil)
+    }
+
+    @Test(arguments: [TabList.favorites, .pinned, .today, .archive])
+    func renameUpdatesEveryListAndFiresPersistenceHook(list: TabList) throws {
+        let model = BrowserModel(engine: FakeEngine())
+        let id = model.newTab(url: URL(string: "https://example.com")!)
+        let tab = try #require(model.liveTabs[id] as? FakeTab)
+        tab.emit(EngineTabState(url: tab.state.url, title: "Page title", progress: 1))
+        model.moveTab(id, to: list)
+        var changes = 0
+        model.onChange = { changes += 1 }
+
+        model.renameTab(id, title: "Saved name")
+        #expect(model.item(id)?.displayTitle == "Saved name")
+        #expect(model.item(id)?.title == "Page title")
+        #expect(changes == 1)
+        model.renameTab(id, title: " \n ")
+        #expect(model.item(id)?.customTitle == nil)
+        #expect(model.item(id)?.displayTitle == "Page title")
+        #expect(changes == 2)
+        model.renameTab(UUID(), title: "Missing tab")
+        model.renameTab(id, title: nil)
+        #expect(changes == 2)
+        try model.workspace.validate()
+    }
+
+    @Test func oversizedCustomNamesAreBoundedBeforePersistence() throws {
+        let directory = try TestDirectory()
+        let model = BrowserModel(engine: FakeEngine())
+        let id = model.newTab()
+        model.renameTab(id, title: String(repeating: "n", count: TabItem.maximumTitleLength + 1))
+        #expect(model.item(id)?.customTitle?.count == TabItem.maximumTitleLength)
+        try WorkspaceStore(directory: directory.url).saveNow(model.workspace)
+    }
+
     @Test func delegateScriptsAndReverseMappingPrecedeFirstLoad() throws {
         let engine = FakeEngine()
         let model = BrowserModel(engine: engine)

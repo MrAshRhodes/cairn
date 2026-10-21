@@ -184,6 +184,16 @@ public final class BrowserModel: EngineTabDelegate {
     public func favorite(_ id: UUID) { moveTab(id, to: .favorites) }
     public func unfavorite(_ id: UUID) { moveTab(id, to: .today) }
 
+    /// Sets a persistent display name without changing page metadata. Nil or a blank name restores the page title.
+    public func renameTab(_ id: UUID, title: String?) {
+        guard let tab = item(id) else { return }
+        let trimmed = title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let customTitle = trimmed.isEmpty ? nil : String(trimmed.prefix(TabItem.maximumTitleLength))
+        guard tab.customTitle != customTitle else { return }
+        update(id) { $0.customTitle = customTitle }
+        changed()
+    }
+
     /// Moves inactive "today" tabs older than `interval` into the Space's archive.
     public func archiveStaleTabs(olderThan interval: TimeInterval, now: Date = Date()) {
         guard interval.isFinite, interval > 0 else { return }
@@ -266,6 +276,8 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func engineTab(_ tab: EngineTab, didChange state: EngineTabState) {
         guard let id = itemID(for: tab) else { return }
+        var state = state
+        state.title = String(state.title.prefix(TabItem.maximumTitleLength))
         let previous = tabStates[id]
         tabStates[id] = state
         let before = item(id)
