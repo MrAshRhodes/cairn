@@ -6,10 +6,12 @@ import CairnChromiumEngine
 #endif
 
 MainActor.assumeIsolated {
+    var prepareForTermination: CairnApp.TerminationPreparation?
     #if CAIRN_CHROMIUM
     ChromiumEngineModule.prepareApplication()
     ChromiumEngineModule.register(in: .shared)
+    prepareForTermination = ChromiumEngineModule.prepareForTermination
     #endif
     WebKitEngineModule.register(in: .shared)
-    CairnApp.run()
+    CairnApp.run(prepareForTermination: prepareForTermination)
 }

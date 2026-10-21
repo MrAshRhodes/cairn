@@ -6,10 +6,10 @@ import CairnCore
 public enum CairnApp {
     private static var delegate: CairnApplicationDelegate?
 
-    public static func run() {
+    public static func run(prepareForTermination: TerminationPreparation? = nil) {
         let app = NSApplication.shared
         app.setActivationPolicy(.regular)
-        let delegate = CairnApplicationDelegate()
+        let delegate = CairnApplicationDelegate(prepareForTermination: prepareForTermination)
         self.delegate = delegate
         app.delegate = delegate
         app.run()
@@ -21,6 +21,12 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     private var services: BrowserServices?
     private var window: NSWindow?
     private var pendingURLs: [URL] = []
+    private let termination: ApplicationTerminationCoordinator
+
+    init(prepareForTermination: CairnApp.TerminationPreparation? = nil) {
+        termination = ApplicationTerminationCoordinator(prepare: prepareForTermination)
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         do {
@@ -69,13 +75,19 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        termination.request(approval: { self.approveTermination() }) { [weak sender] approved in
+            sender?.reply(toApplicationShouldTerminate: approved)
+        }
+    }
+
+    private func approveTermination() -> Bool {
         if services?.hasUnsavedBoostChanges == true {
             let alert = NSAlert()
             alert.messageText = "A Boost has unsaved changes"
             alert.informativeText = "Keep Cairn open to save your changes, or discard them and quit."
             alert.addButton(withTitle: "Keep Editing")
             alert.addButton(withTitle: "Discard & Quit")
-            if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            if alert.runModal() == .alertFirstButtonReturn { return false }
         }
         do { try services?.flush() }
         catch {
@@ -84,9 +96,9 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
             alert.informativeText = "\(error.localizedDescription)\nYou can keep Cairn open and try again."
             alert.addButton(withTitle: "Keep Cairn Open")
             alert.addButton(withTitle: "Quit Without Saving")
-            if alert.runModal() == .alertFirstButtonReturn { return .terminateCancel }
+            if alert.runModal() == .alertFirstButtonReturn { return false }
         }
-        return .terminateNow
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) { services?.shutdown() }

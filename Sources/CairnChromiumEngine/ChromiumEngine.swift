@@ -12,6 +12,13 @@ public enum ChromiumEngineModule {
     @MainActor public static func register(in registry: EngineRegistry) {
         registry.register(.chromium) { ChromiumEngine() }
     }
+
+    /// Invoke only after the app delegate's save/discard checks have approved quitting.
+    @MainActor public static func prepareForTermination(completion: @escaping @MainActor () -> Void) {
+        CCChromiumRuntime.shutdown {
+            MainActor.assumeIsolated { completion() }
+        }
+    }
 }
 
 @MainActor
@@ -64,7 +71,7 @@ public final class ChromiumEngine: BrowserEngine {
         for tab in tabs.values.compactMap(\.value) { tab.close() }
         tabs.removeAll()
         // Runtime is process-wide and must survive switching back to WebKit and then Chromium.
-        // CCApplication.terminate closes remaining browsers and shuts CEF down exactly once.
+        // The approved application-termination hook shuts the runtime down exactly once.
     }
 
     public static func profileDirectory(_ profileID: String) -> String {
