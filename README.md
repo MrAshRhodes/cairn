@@ -8,55 +8,103 @@ Cairn is an original implementation, not a fork or recompiled version of Arc.
 It is not affiliated with The Browser Company. **Do not treat this early project
 as a hardened replacement for a maintained mainstream browser.**
 
+[Product site](https://mrashrhodes.github.io/cairn/) ·
+[Downloads](https://github.com/MrAshRhodes/cairn/releases/latest) ·
+[Release guide](docs/RELEASING.md)
+
+![Cairn's native welcome screen and vertical workspace](site/assets/cairn-home.png)
+
+*Actual Cairn welcome-screen capture, not a mockup.*
+
+## Install the developer preview
+
+For macOS 14+, on Apple Silicon or Intel:
+
+```sh
+brew install --cask mrashrhodes/cairn/cairn
+```
+
+The [Homebrew tap](https://github.com/MrAshRhodes/homebrew-cairn) tracks published
+release archives. You can also download the ZIP or DMG from
+[GitHub Releases](https://github.com/MrAshRhodes/cairn/releases/latest).
+
+**The published v0.1.0 preview uses WebKit, not Chromium.** It is universal,
+ad-hoc signed and not Apple-notarized; macOS may block it. Do not disable system
+security protections to run it. Sparkle authenticates its update archive and feed,
+which is separate from Apple Developer ID signing.
+
 ## Build on your Mac
 
 Requires macOS 14 or later, Swift 6, and Apple's Command Line Tools or Xcode.
-The first build downloads Sparkle through Swift Package Manager.
+The first build downloads Sparkle through Swift Package Manager. Chromium app
+builds additionally require CMake 3.21+ and Python 3.12+ (or a Python version with
+`tarfile.data_filter`). Read the [CEF security status](docs/UPDATING_CHROMIUM.md)
+before preparing its substantial native dependency:
 
 ```sh
 git clone https://github.com/mrashrhodes/cairn.git
 cd cairn
 make build
 make test
+python3 engine/tool.py fetch
+python3 engine/tool.py build
 make app
 ```
 
-The generated application bundle is `dist/Cairn.app`. A development build is
+The generated `dist/Cairn.app` bundles **Chromium and its matching helper processes**
+for your Mac's architecture. Fresh settings select Chromium. If you previously
+selected WebKit, choose Chromium in Settings; an existing engine preference is
+never silently overwritten. Follow any restart instruction shown there.
+
+For the smaller, system-WebKit-only app, skip CEF preparation and run
+`make webkit-app` instead. `make build`, `make test`, and `make run` remain
+WebKit-only unless explicitly built with Chromium enabled. CEF must run from a
+proper application bundle, not an unbundled `swift run`.
+
+A development build is
 ad-hoc signed unless you configure your own Developer ID signing. Ad-hoc signing
 is not notarization; see the [release guide](docs/RELEASING.md) before distributing
 downloads.
 
 ## Developer preview status
 
-The current implementation uses system WebKit and includes native Spaces, vertical tabs,
+The implementation includes native Spaces, vertical tabs,
 favorites and pins, session restoration and archiving, command search, split
 browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
 explicit trust decision. Authenticated WebKit downloads use a native save dialog
 and are separate from the URL-only download list.
 
-Automated tests cover the integrated services and real WebKit behavior, including
-profile isolation and authenticated downloads. The optional arm64 CEF application
-also compiles. Interactive GUI and VoiceOver checks, Intel CEF runtime testing,
-Apple Developer ID signing, and notarization are **not yet verified**. This is a
-developer preview, not a production-readiness claim.
+Automated tests cover the integrated services and real WebKit behavior. The
+bundled arm64 Chromium engine has also passed native rendering checks for CSS
+grid, container queries, `:has()`, JavaScript modules, network requests, responsive
+viewport resizing, and compositor output, alongside profile isolation and lifecycle
+checks. These are local development checks, not release-security certification.
 
-A signed, auto-updatable download is not published yet. Build from source for now;
-local release signing still requires the maintainer's macOS Keychain approval.
-Private update-signing material is not uploaded to GitHub.
+![Actual Chromium rendering of Cairn's local responsive test page](site/assets/chromium-rendering.png)
+
+*Actual engine compositor output. This is a local rendering fixture, not the full
+Cairn shell or a claim that every website works.*
+
+Full interactive Chromium browsing acceptance, VoiceOver, Intel CEF runtime
+testing, Apple Developer ID signing and notarization remain **unverified**.
+Private update-signing material remains in the maintainer's local Keychain, not
+GitHub. The weekly release workflow is wired but cannot publish until CI signing
+is explicitly provisioned; see the [release guide](docs/RELEASING.md#weekly-release-automation).
 
 The build wrapper handles the Command Line Tools-only SwiftPM/Swift Testing
 configuration. It does not install or change your system toolchain.
 
 ## Engines and security updates
 
-The normal build uses **system WebKit**, updated by Apple through macOS/Safari
-updates. Keep macOS and its browser components current.
+The published download and WebKit-only build use **system WebKit**, updated by
+Apple through macOS/Safari updates. Keep macOS and its browser components current.
 
-The optional **Chromium Embedded Framework (CEF)** build has separate dependency,
+The experimental **Chromium Embedded Framework (CEF)** app build has separate dependency,
 helper-process, packaging and security requirements. It is not updated by
 installing Google Chrome. Follow the [Chromium maintenance guide](docs/UPDATING_CHROMIUM.md);
 do not enable an old CEF build just because it compiles. A version-monitoring
 workflow cannot guarantee upstream fixes exist or ship them without a release.
+The current pin trails Chrome stable; public Chromium distribution remains gated.
 
 Application auto-updates require signed Sparkle releases and the matching public
 key embedded in the installed application. An unconfigured source build must

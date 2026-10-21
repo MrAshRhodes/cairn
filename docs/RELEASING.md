@@ -14,7 +14,7 @@ The v0.1.0 publishing path is **local Keychain signing, followed by a separate,
 explicit upload of the finished release assets**. GitHub Actions signing is not
 configured: no private signing material has been uploaded to GitHub.
 
-The planned v0.1.0 artifact is **WebKit, universal arm64/x86_64, ad-hoc signed, and
+The published v0.1.0 artifact is **WebKit, universal arm64/x86_64, ad-hoc signed, and
 not notarized**. It is a developer preview, not a Gatekeeper-trusted distribution.
 The integrated GUI has **not yet been manually verified**. Build, packaging and
 signature checks must not be presented as a completed manual GUI acceptance test.
@@ -29,6 +29,52 @@ This public key may be committed or stored as a GitHub variable. Its correspondi
 private key stays in the maintainer's local Keychain; never print it, pass it in
 command-line arguments, write it to a key file, or upload it to GitHub.
 
+## Weekly release automation
+
+The Release workflow checks the default branch every **Monday at 06:17 UTC**.
+GitHub schedules are best-effort, not a guaranteed publication time. It compares
+the checked-out commit with the latest published stable release:
+
+- No net product changes: skip testing, building, version creation and publication.
+  README, website, test-only and workflow-only edits do not trigger a release.
+- Product changes: inspect commits touching the changed product files. A
+  conventional `feat:` / `feat(scope):` bumps minor; `type!:` or a
+  `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer bumps major. Other changes bump
+  patch. The largest applicable bump wins.
+- Run the reusable CI workflow on Apple Silicon and Intel, then build and
+  authenticate the **universal WebKit** preview. The derived version is embedded
+  in the app, archive names and appcast; no version-only commit is pushed.
+- Verify transferred checksums, ensure the latest release has not changed, and
+  publish a new release/tag targeting the tested commit, without overwriting
+  existing artifacts. A failed
+  build or signing check publishes nothing. An existing unpublished planned tag
+  fails closed instead of overwriting it.
+
+This pipeline **does not publish Chromium**. Public Chromium distribution still
+requires the security review, both-architecture packaging/update strategy and
+real-device signing checks in the Chromium guide. Weekly scheduling does not
+close an upstream security gap.
+
+In Actions, select **Release → Run workflow**, on the default branch, with
+`dry_run` enabled to inspect the next version and run CI without signing or
+publication. Disable it only for an intended authenticated release. Pushing an
+explicit stable `vMAJOR.MINOR.PATCH` tag also runs the same pipeline; the tag must
+identify the checked-out commit and be newer than the current release.
+
+**CI publication is currently blocked on signing provisioning.** Only the public
+Sparkle key is configured in GitHub. The existing private key remains in the local
+Keychain. After a separate, explicit maintainer security decision, configure a
+protected `release` environment with the matching `SPARKLE_PRIVATE_ED_KEY` secret
+and retain `SPARKLE_PUBLIC_ED_KEY` as a variable. Optional Apple signing and
+notarization credentials are described below. Do not create a replacement Sparkle
+key: installed clients trust the existing public key. Until provisioning is
+approved, scheduled product releases stop with an explicit error; local
+Keychain-native signing remains available.
+
+The Homebrew tap independently checks the published release and opens a cask
+update for review. The product site deploys from `site/` using the Product site
+workflow; site-only changes never create a browser release.
+
 ## Local development (no Apple account)
 
 Requires macOS 14+, Swift 6+, Python 3, Command Line Tools (or Xcode), and ShellCheck.
@@ -42,7 +88,9 @@ scripts/make-dmg.sh
 open dist/Cairn.app
 ```
 
-`make app` and `make dmg` are shortcuts. Use `ARCH=x86_64` or `ARCH=universal`
+`make webkit-app` is the WebKit bundle shortcut. `make app` and `make dmg` now
+build the experimental Chromium variant, which requires the separately prepared
+CEF dependency. Use `ARCH=x86_64` or `ARCH=universal` with the WebKit bundle script
 for an Intel or universal binary, and `CONFIGURATION=debug` for a debug build.
 The default architecture is the host's architecture. Universal packaging builds
 each slice independently, then combines the executable with `lipo`.

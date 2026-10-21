@@ -27,6 +27,7 @@ swiftc -parse-as-library Sources/CairnUpdater/Updater.swift Resources/ReleaseToo
 "$work/update-tests" "$work"
 python3 Resources/ReleaseTools/PackagingTests.py "$work"
 python3 Resources/ReleaseTools/SigningTests.py
+python3 Resources/ReleaseTools/PlanReleaseTests.py
 # RFC 8032 public key + signature for an empty message; private material is never needed.
 public_key="11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 signature="5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="
