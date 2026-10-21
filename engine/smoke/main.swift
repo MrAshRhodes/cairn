@@ -119,7 +119,9 @@ enum SmokeError: Error { case failed(String) }
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
         }
         engine.shutdown()
-        NSApp.terminate(nil)
+        ChromiumEngineModule.prepareForTermination {
+            NSApp.terminate(nil)
+        }
     }
 
     func engineTab(_ tab: EngineTab, didChange state: EngineTabState) {

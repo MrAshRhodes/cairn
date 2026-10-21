@@ -19,7 +19,8 @@ bool running = false;
 bool ready = false;
 bool stopping = false;
 bool terminated = false;
-bool terminatingApplication = false;
+typedef void (^ShutdownCompletion)(void);
+NSMutableArray<ShutdownCompletion> *shutdownCompletions;
 int pendingBrowsers = 0;
 bool pumping = false;
 NSTimer *pumpTimer;
@@ -77,7 +78,6 @@ CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral) {
 
 @interface CCApplication : NSApplication <CefAppProtocol>
 @property(nonatomic) BOOL handlingSendEvent;
-- (void)completeTermination;
 @end
 
 @implementation CCApplication
@@ -86,12 +86,6 @@ CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral) {
   CefScopedSendingEvent scope;
   [super sendEvent:event];
 }
-- (void)terminate:(id)sender {
-  if (!running) { [super terminate:sender]; return; }
-  terminatingApplication = true;
-  [CCChromiumRuntime shutdown];
-}
-- (void)completeTermination { [super terminate:nil]; }
 @end
 
 typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
@@ -270,7 +264,9 @@ void FinishShutdown() {
   CefShutdown();
   library.reset();
   terminated = true; // CEF may only be initialized once per process.
-  if (terminatingApplication) [(CCApplication *)NSApp completeTermination];
+  NSArray<ShutdownCompletion> *completions = [shutdownCompletions copy];
+  shutdownCompletions = nil;
+  for (ShutdownCompletion completion in completions) completion();
 }
 
 class Done final : public CefCompletionCallback {
@@ -369,6 +365,16 @@ class CookiesDone final : public CefDeleteCookiesCallback {
     if (client->browser) client->browser->GetHost()->CloseBrowser(true);
   }
   if (clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
+}
++ (void)shutdownWithCompletion:(void (^)(void))completion {
+  NSAssert(NSThread.isMainThread, @"CEF must shut down on the main thread");
+  if (!running) {
+    dispatch_async(dispatch_get_main_queue(), completion);
+    return;
+  }
+  if (!shutdownCompletions) shutdownCompletions = [NSMutableArray array];
+  [shutdownCompletions addObject:[completion copy]];
+  [self shutdown];
 }
 + (void)clearProfile:(NSString *)profile cookies:(BOOL)cookies cache:(BOOL)cache
          completion:(void (^)(void))completion {

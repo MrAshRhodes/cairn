@@ -96,11 +96,14 @@ import CairnChromiumEngine
 #endif
 
 MainActor.assumeIsolated {
+    var prepareForTermination: CairnApp.TerminationPreparation?
     #if CAIRN_CHROMIUM
     precondition(ChromiumEngineModule.prepareApplication())
     ChromiumEngineModule.register(in: EngineRegistry.shared)
+    prepareForTermination = ChromiumEngineModule.prepareForTermination
     #endif
-    // Register WebKit as well, then start the normal Cairn UI.
+    // Register WebKit as well, then start the normal Cairn UI:
+    CairnApp.run(prepareForTermination: prepareForTermination)
 }
 ```
 
@@ -119,10 +122,16 @@ WebKit remains registered. The app must not retry CEF initialization in-process
 after a completed CEF shutdown.
 
 `BrowserEngine.shutdown()` closes that engine's tabs, but preserves the
-process-wide runtime so switching to WebKit and back remains possible. The custom
-application termination path closes all CEF browsers, waits for their
-`OnBeforeClose` notifications, releases request contexts, calls `CefShutdown`
-outside the CEF callback stack, and only then terminates AppKit. Explicit tab/app
+process-wide runtime so switching to WebKit and back remains possible. AppKit
+first asks the normal application delegate to approve quitting. Unsaved Boost
+and persistence-failure checks must complete **before** any CEF teardown; Keep
+Editing/Keep Cairn Open leave the browsers and runtime untouched. After approval,
+the optional termination hook returns `terminateLater`, closes all CEF browsers,
+waits for their `OnBeforeClose` notifications, releases request contexts, and calls
+`CefShutdown` outside the CEF callback stack. Only then does the coordinator reply
+to AppKit's pending termination request, exactly once. Repeated/nested quit
+requests cannot bypass checks or start duplicate teardown. The default build
+without this hook still returns `terminateNow` after approval. Explicit tab/app
 close currently forces close (beforeunload cancellation is not supported).
 
 ## Profiles and supported operations
@@ -274,6 +283,9 @@ Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
   arm64 evidence**, not notarization, Intel execution or hardened-release proof.
 * A hardened ad-hoc launch failed at dyld's Team ID validation, as described above.
   No Developer ID signing identity was supplied for release validation.
+* The later quit-cancellation fix was verified with headless approval/deferred
+  termination regression tests and a full gated build, without relaunching the
+  GUI. Repeat interactive cancel/approve/quit testing in release validation.
 
 Before approving an update: review relevant security fixes and CEF API changes;
 fetch/check both architectures; build the version-matched wrapper and helper;

@@ -15,6 +15,7 @@ NS_ASSUME_NONNULL_BEGIN
 + (BOOL)startWithRoot:(NSString *)root error:(NSError *_Nullable *_Nullable)error;
 + (NSString *)versionDescription;
 + (void)shutdown;
++ (void)shutdownWithCompletion:(void (^)(void))completion NS_SWIFT_NAME(shutdown(completion:));
 + (void)clearProfile:(NSString *)profile cookies:(BOOL)cookies cache:(BOOL)cache
          completion:(void (^)(void))completion;
 @end
