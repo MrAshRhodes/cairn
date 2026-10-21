@@ -28,10 +28,15 @@ public final class BrowserModel: EngineTabDelegate {
     /// Fired after every mutation of `workspace`; persistence subscribes here.
     @ObservationIgnored public var onChange: (() -> Void)?
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
+    @ObservationIgnored public var onError: ((Error) -> Void)?
+    public private(set) var errorMessage: String?
+    @ObservationIgnored private var liveProfileIDs: [UUID: String] = [:]
+    @ObservationIgnored private var liveSpaceIDs: [UUID: UUID] = [:]
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine
         self.workspace = workspace.spaces.isEmpty ? .makeDefault() : workspace
+        repairReferences()
     }
 
     // MARK: Lookup
@@ -70,19 +75,30 @@ public final class BrowserModel: EngineTabDelegate {
     // MARK: Live engine tabs
     /// The engine tab for an item, created (and loaded) on first use.
     public func liveTab(for id: UUID) -> EngineTab? {
-        if let t = liveTabs[id] { return t }
-        guard let loc = locate(id), let item = item(id) else { return nil }
+        guard let loc = locate(id), loc.list != .archive, let item = item(id) else { return nil }
         let space = workspace.spaces[loc.spaceIndex ?? selectedSpaceIndex]
-        let t = engine.makeTab(configuration: EngineConfiguration(profileID: space.profileID), initialURL: item.url)
+        if let t = liveTabs[id], liveProfileIDs[id] == space.profileID { return t }
+        unloadTab(id)
+        // Factories must not start navigation before delegates, scripts and reverse lookup are ready.
+        let t = engine.makeTab(configuration: EngineConfiguration(profileID: space.profileID), initialURL: nil)
+        liveTabs[id] = t
+        liveProfileIDs[id] = space.profileID
+        liveSpaceIDs[id] = space.id
         t.delegate = self
         t.setUserScripts(userScriptProvider?(item.url) ?? [])
-        liveTabs[id] = t
+        if let url = item.url {
+            if URLResolver.isNavigable(url) { t.load(url) }
+            else { report(ServiceError.navigation("Unsupported navigation URL.")) }
+        }
         return t
     }
 
     public func unloadTab(_ id: UUID) {
-        liveTabs[id]?.close()
+        let tab = liveTabs[id]
         liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil
+        liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
+        tab?.delegate = nil
+        tab?.close()
     }
 
     /// Re-applies `userScriptProvider` to every live tab (call after Boosts change).
@@ -94,7 +110,9 @@ public final class BrowserModel: EngineTabDelegate {
     @discardableResult
     public func newTab(url: URL? = nil, in spaceID: UUID? = nil, activate: Bool = true) -> UUID {
         let s = spaceIndex(spaceID) ?? selectedSpaceIndex
-        let tab = TabItem(url: url)
+        let validURL = url.flatMap { URLResolver.isNavigable($0) ? $0 : nil }
+        if url != nil, validURL == nil { report(ServiceError.navigation("Unsupported navigation URL.")) }
+        let tab = TabItem(url: validURL)
         workspace.spaces[s].tabs.append(tab)
         if activate { select(tab.id) } else { _ = liveTab(for: tab.id) }
         changed()
@@ -103,10 +121,12 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func select(_ id: UUID) {
         guard let loc = locate(id) else { return }
+        if loc.list == .archive { moveTab(id, to: .today, in: workspace.spaces[loc.spaceIndex!].id) }
         let s = loc.spaceIndex ?? selectedSpaceIndex
         workspace.selectedSpaceID = workspace.spaces[s].id
         workspace.spaces[s].selectedTabID = id
         update(id) { $0.lastActiveAt = Date() }
+        repairReferences()
         _ = liveTab(for: id)
         if !splitTabIDs.contains(id) { splitTabIDs = [] }
         changed()
@@ -115,6 +135,7 @@ public final class BrowserModel: EngineTabDelegate {
     public func selectSpace(_ id: UUID) {
         guard let s = spaceIndex(id) else { return }
         workspace.selectedSpaceID = id
+        repairReferences()
         if let t = workspace.spaces[s].selectedTabID { _ = liveTab(for: t) }
         splitTabIDs = []
         changed()
@@ -125,6 +146,11 @@ public final class BrowserModel: EngineTabDelegate {
         guard let loc = locate(id) else { return }
         if loc.list == .pinned || loc.list == .favorites {
             unloadTab(id)
+            if splitTabIDs.contains(id) { splitTabIDs = [] }
+            for s in workspace.spaces.indices where workspace.spaces[s].selectedTabID == id {
+                workspace.spaces[s].selectedTabID = nextSelectable(in: s, excluding: id)
+            }
+            changed()
             return
         }
         removeTab(id)
@@ -135,22 +161,18 @@ public final class BrowserModel: EngineTabDelegate {
         unloadTab(id)
         splitTabIDs.removeAll { $0 == id }
         if splitTabIDs.count < 2 { splitTabIDs = [] }
-        let s = loc.spaceIndex ?? selectedSpaceIndex
-        let wasSelected = workspace.spaces[s].selectedTabID == id
         remove(at: loc)
-        if wasSelected {
-            let space = workspace.spaces[s]
-            let next = space.tabs.isEmpty ? space.pinned.last?.id : space.tabs[min(loc.index, space.tabs.count - 1)].id
-            workspace.spaces[s].selectedTabID = next
-            if let next, workspace.selectedSpaceID == space.id { _ = liveTab(for: next) }
-        }
+        repairReferences()
+        if let next = selectedTabID { _ = liveTab(for: next) }
         changed()
     }
 
     public func moveTab(_ id: UUID, to list: TabList, in spaceID: UUID? = nil, at index: Int? = nil) {
         guard let loc = locate(id), var moved = item(id) else { return }
         let target = list == .favorites ? nil : (spaceIndex(spaceID) ?? loc.spaceIndex ?? selectedSpaceIndex)
-        if let t = target, loc.spaceIndex != nil, t != loc.spaceIndex { unloadTab(id) }
+        if list == .archive || target != loc.spaceIndex || (list == .favorites) != (loc.list == .favorites) {
+            unloadTab(id)
+        }
         remove(at: loc)
         if list == .pinned || list == .favorites { moved.homeURL = moved.homeURL ?? moved.url } else { moved.homeURL = nil }
         insert(moved, list: list, spaceIndex: target, at: index)
@@ -164,9 +186,11 @@ public final class BrowserModel: EngineTabDelegate {
 
     /// Moves inactive "today" tabs older than `interval` into the Space's archive.
     public func archiveStaleTabs(olderThan interval: TimeInterval, now: Date = Date()) {
+        guard interval.isFinite, interval > 0 else { return }
         for s in workspace.spaces.indices {
             let stale = workspace.spaces[s].tabs.filter {
-                $0.id != workspace.spaces[s].selectedTabID && now.timeIntervalSince($0.lastActiveAt) > interval
+                $0.id != workspace.spaces[s].selectedTabID && !splitTabIDs.contains($0.id)
+                    && now.timeIntervalSince($0.lastActiveAt) > interval
             }
             for t in stale { unloadTab(t.id); moveTab(t.id, to: .archive, in: workspace.spaces[s].id) }
         }
@@ -174,19 +198,32 @@ public final class BrowserModel: EngineTabDelegate {
 
     // MARK: Navigation
     public func navigate(_ input: String) {
-        guard let url = URLResolver.resolve(input, searchTemplate: searchTemplate) else { return }
+        guard let url = URLResolver.resolve(input, searchTemplate: searchTemplate) else {
+            if !input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                report(ServiceError.navigation("The address or search template is invalid."))
+            }
+            return
+        }
         if let id = selectedTabID, item(id) != nil { load(url, in: id) } else { newTab(url: url) }
     }
 
     public func load(_ url: URL, in id: UUID) {
+        guard URLResolver.isNavigable(url) else { report(ServiceError.navigation("Unsupported navigation URL.")); return }
+        guard let loc = locate(id) else { return }
+        if loc.list == .archive { moveTab(id, to: .today, in: workspace.spaces[loc.spaceIndex!].id) }
+        errorMessage = nil
         update(id) { $0.url = url }
-        if let t = liveTabs[id] { t.load(url) } else { _ = liveTab(for: id) }
+        if let t = liveTabs[id] {
+            t.setUserScripts(userScriptProvider?(url) ?? [])
+            t.load(url)
+        } else { _ = liveTab(for: id) }
         changed()
     }
 
     // MARK: Split view
     public func splitSelected(with other: UUID) {
-        guard let current = selectedTabID, current != other, item(other) != nil else { return }
+        guard let current = selectedTabID, current != other, isVisible(current, in: selectedSpaceIndex),
+              isVisible(other, in: selectedSpaceIndex) else { return }
         _ = liveTab(for: other)
         splitTabIDs = [current, other]
     }
@@ -203,7 +240,10 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func updateSpace(_ id: UUID, _ body: (inout Space) -> Void) {
         guard let s = spaceIndex(id) else { return }
+        let previous = workspace
         body(&workspace.spaces[s])
+        do { try workspace.validate() }
+        catch { workspace = previous; report(error); return }
         changed()
     }
 
@@ -213,7 +253,11 @@ public final class BrowserModel: EngineTabDelegate {
         let space = workspace.spaces[s]
         (space.pinned + space.tabs + space.archive).forEach { unloadTab($0.id) }
         workspace.spaces.remove(at: s)
-        if workspace.selectedSpaceID == id { workspace.selectedSpaceID = workspace.spaces[0].id }
+        if workspace.selectedSpaceID == id {
+            workspace.selectedSpaceID = workspace.spaces[0].id
+            splitTabIDs = []
+        }
+        repairReferences()
         changed()
     }
 
@@ -225,21 +269,72 @@ public final class BrowserModel: EngineTabDelegate {
         let previous = tabStates[id]
         tabStates[id] = state
         let before = item(id)
-        update(id) { if let u = state.url { $0.url = u }; if !state.title.isEmpty { $0.title = state.title } }
+        update(id) {
+            if let url = state.url, URLResolver.isNavigable(url) { $0.url = url }
+            if !state.title.isEmpty { $0.title = state.title }
+        }
         if item(id) != before { changed() }
-        if !state.isLoading, previous?.isLoading == true, let url = state.url {
+        if let error = state.errorMessage, error != previous?.errorMessage {
+            report(ServiceError.navigation(error))
+        }
+        if !state.isLoading, state.errorMessage == nil, previous?.isLoading == true, let url = state.url,
+           URLResolver.isWebURL(url) {
             onNavigationCommitted?(url, state.title)
         }
     }
     public func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) {
         if let id = itemID(for: tab) { favicons[id] = image }
     }
-    public func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) { newTab(url: url, activate: activate) }
-    public func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) { downloadHandler?(url, suggestedFilename) }
+    public func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) {
+        guard let id = itemID(for: tab), let origin = liveSpaceIDs[id], spaceIndex(origin) != nil else { return }
+        newTab(url: url, in: origin, activate: activate)
+    }
+    public func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) {
+        guard itemID(for: tab) != nil else { return }
+        guard let downloadHandler else { report(ServiceError.invalidDownload("No download handler is configured.")); return }
+        downloadHandler(url, suggestedFilename)
+    }
     public func engineTabDidRequestClose(_ tab: EngineTab) { if let id = itemID(for: tab) { closeTab(id) } }
 
     // MARK: Internals
-    private func changed() { onChange?() }
+    private func changed() { repairReferences(); onChange?() }
+
+    private func report(_ error: Error) {
+        errorMessage = error.localizedDescription
+        onError?(error)
+    }
+
+    private func isVisible(_ id: UUID, in space: Int) -> Bool {
+        workspace.favorites.contains { $0.id == id }
+            || workspace.spaces[space].pinned.contains { $0.id == id }
+            || workspace.spaces[space].tabs.contains { $0.id == id }
+    }
+
+    private func nextSelectable(in space: Int, excluding id: UUID) -> UUID? {
+        workspace.spaces[space].tabs.last(where: { $0.id != id })?.id
+            ?? workspace.spaces[space].pinned.last(where: { $0.id != id })?.id
+            ?? workspace.favorites.first(where: { $0.id != id })?.id
+    }
+
+    private func repairReferences() {
+        if spaceIndex(workspace.selectedSpaceID) == nil { workspace.selectedSpaceID = workspace.spaces.first?.id }
+        for s in workspace.spaces.indices {
+            if let selected = workspace.spaces[s].selectedTabID, !isVisible(selected, in: s) {
+                workspace.spaces[s].selectedTabID = nextSelectable(in: s, excluding: selected)
+            }
+        }
+        if splitTabIDs.count != 2 || Set(splitTabIDs).count != 2
+            || !splitTabIDs.allSatisfy({ isVisible($0, in: selectedSpaceIndex) })
+            || !(selectedTabID.map { splitTabIDs.contains($0) } ?? false) {
+            splitTabIDs = []
+        }
+        // A favorite is global metadata, not a global cookie jar. Recreate its live view on Space changes.
+        for id in Array(liveTabs.keys) {
+            guard let location = locate(id), location.list != .archive else { unloadTab(id); continue }
+            let space = workspace.spaces[location.spaceIndex ?? selectedSpaceIndex]
+            if liveProfileIDs[id] != space.profileID || liveSpaceIDs[id] != space.id { unloadTab(id) }
+        }
+    }
 
     private func update(_ id: UUID, _ body: (inout TabItem) -> Void) {
         guard let loc = locate(id) else { return }
