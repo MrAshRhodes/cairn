@@ -14,7 +14,7 @@ using namespace cc;
 @implementation CCContainerView
 - (void)viewDidMoveToWindow {
   [super viewDidMoveToWindow];
-  if (self.window) [self.owner ensureBrowser];
+  if (self.window) { [self.owner ensureBrowser]; [self.owner restoreContentFocus]; }
 }
 @end
 
@@ -68,6 +68,7 @@ using namespace cc;
   native.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   native.frame = self.view.bounds;
   browser->GetHost()->SetZoomLevel(std::log(_zoom) / std::log(1.2));
+  [self enableSpellChecking];
   self.scriptOperations = 1;
   __weak CCChromiumTab *weakSelf = self;
   [self call:@"Page.enable" params:@{} reply:^(NSDictionary *, NSError *error) {
@@ -215,6 +216,7 @@ using namespace cc;
 - (void)close {
   if (self.closing) return;
   self.closing = YES; self.pendingURL = nil;
+  [self exitFullscreen];
   [self cancelReplies:@"Tab closed"];
   if (_client && _client->browser) _client->browser->GetHost()->CloseBrowser(true);
 }

@@ -31,7 +31,7 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var onError: ((Error) -> Void)?
     public private(set) var errorMessage: String?
     @ObservationIgnored private var liveProfileIDs: [UUID: String] = [:]
-    @ObservationIgnored private var liveSpaceIDs: [UUID: UUID] = [:]
+    @ObservationIgnored private(set) var liveSpaceIDs: [UUID: UUID] = [:]
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine

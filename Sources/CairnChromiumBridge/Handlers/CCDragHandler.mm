@@ -1,17 +1,23 @@
-// CCDragHandler.mm — SKELETON: dragging into the page and draggable regions.
-//
-// CEF family: CefDragHandler (OnDragEnter, OnDraggableRegionsChanged).
-// Status: not implemented. The factory returns nullptr, which keeps CEF's default behavior.
-// Already registered: Client::GetDragHandler() and CCClient.mm call MakeDragHandler below.
-//
-// To implement, change only this file (plus your slot in the public header and a Swift extension):
-//   1. add `class DragHandler final : public TabHandler, public CefDragHandler` in the
-//      anonymous namespace, ending with IMPLEMENT_REFCOUNTING(DragHandler) (pattern: CCFindHandler.mm);
-//   2. replace the factory body with `return new DragHandler(client);`.
+// CCDragHandler.mm — CefDragHandler: what may be dragged into a page.
+// Dragging links, text and files into and out of pages is Chromium's own native behavior; this only
+// refuses drags that would navigate to script, so dropping a javascript: link never runs it.
 #import "../CCInternal.h"
 
 namespace cc {
+namespace {
+class DragHandler final : public TabHandler, public CefDragHandler {
+ public:
+  explicit DragHandler(Client& client) : TabHandler(client) {}
+  bool OnDragEnter(CefRefPtr<CefBrowser>, CefRefPtr<CefDragData> data, DragOperationsMask) override {
+    if (!data->IsLink()) return false;
+    NSString *scheme = [NSURL URLWithString:String(data->GetLinkURL())].scheme.lowercaseString;
+    return [@[@"javascript", @"vbscript", @"data"] containsObject:scheme ?: @""];
+  }
+ private:
+  IMPLEMENT_REFCOUNTING(DragHandler);
+};
+}
 
-CefRefPtr<CefDragHandler> MakeDragHandler(Client&) { return nullptr; }
+CefRefPtr<CefDragHandler> MakeDragHandler(Client& client) { return new DragHandler(client); }
 
 }  // namespace cc

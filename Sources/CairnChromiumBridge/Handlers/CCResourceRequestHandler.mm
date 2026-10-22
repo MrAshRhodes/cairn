@@ -1,25 +1,38 @@
-// CCResourceRequestHandler.mm — SKELETON: per-request network hooks (request filtering and blocking,
-// header rewriting, response inspection, custom schemes).
+// CCResourceRequestHandler.mm — CefResourceRequestHandler: per-request network hooks.
 //
-// CEF family: CefResourceRequestHandler (GetCookieAccessFilter, OnBeforeResourceLoad,
-// GetResourceHandler, OnResourceRedirect, OnResourceResponse, GetResourceResponseFilter,
-// OnResourceLoadComplete, OnProtocolExecution).
-// Status: not implemented. The factory returns nullptr, which keeps CEF's default behavior.
-// Already registered: CEF reaches this through CefRequestHandler::GetResourceRequestHandler, so it has
-// no CefClient getter and no line in CCClient.mm; MakeRequestHandler (CCRequestHandler.mm) calls the
-// factory below once per browser and hands the result to CEF for every request. Callbacks may run on
-// a CEF thread other than the main thread, so keep state in this handler and keep it thread-safe.
-//
-// To implement, change only this file (plus your slot in the public header and a Swift extension):
-//   1. add `class ResourceRequestHandler final : public TabHandler, public CefResourceRequestHandler`
-//      in the anonymous namespace, ending with IMPLEMENT_REFCOUNTING(ResourceRequestHandler)
-//      (pattern: CCFindHandler.mm);
-//   2. replace the factory body with `return new ResourceRequestHandler(client);`.
-// Callbacks may run for every subresource of every tab: keep them fast and never block.
+// CEF reaches this through CefRequestHandler::GetResourceRequestHandler (CCRequestHandler.mm), once per
+// browser, for every request. Callbacks may run on a CEF thread other than the main thread: keep state in
+// this handler, keep it thread-safe, keep it fast and never block. Today it implements only external
+// protocol handling; request filtering, header rewriting and custom schemes belong here too.
 #import "../CCInternal.h"
 
 namespace cc {
+namespace {
+class ResourceRequestHandler final : public TabHandler, public CefResourceRequestHandler {
+ public:
+  explicit ResourceRequestHandler(Client& client) : TabHandler(client) {}
 
-CefRefPtr<CefResourceRequestHandler> MakeResourceRequestHandler(Client&) { return nullptr; }
+  // Chromium never launches another application itself: the page's navigation to mailto:, tel: or a custom
+  // scheme is reported to the app, which decides (allow-list, consent prompt) and opens it.
+  void OnProtocolExecution(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest> request,
+                           bool& allow_os_execution) override {
+    allow_os_execution = false;
+    NSString *url = String(request->GetURL());
+    __weak CCChromiumTab *weakTab = owner;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      CCChromiumTab *tab = weakTab;
+      if (!tab || tab.closing) return;
+      if ([tab.delegate conformsToProtocol:@protocol(CCChromiumTabContextMenuDelegate)])
+        [(id<CCChromiumTabContextMenuDelegate>)tab.delegate chromiumTab:tab openExternalURL:url];
+    });
+  }
+ private:
+  IMPLEMENT_REFCOUNTING(ResourceRequestHandler);
+};
+}
+
+CefRefPtr<CefResourceRequestHandler> MakeResourceRequestHandler(Client& client) {
+  return new ResourceRequestHandler(client);
+}
 
 }  // namespace cc

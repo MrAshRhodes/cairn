@@ -51,10 +51,21 @@ NS_ASSUME_NONNULL_BEGIN
 // [Audio]
 
 // [ContextMenu]
+@protocol CCChromiumTabContextMenuDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab searchFor:(NSString *)query activate:(BOOL)activate;
+// A page navigated to a non-web scheme (mailto:, tel:, custom). The bridge never launches it itself.
+- (void)chromiumTab:(CCChromiumTab *)tab openExternalURL:(NSString *)url;
+@end
 
 // [Dialog]
 
 // [Display]
+@interface CCChromiumTab (Fullscreen)
+@property(nonatomic, readonly, getter=isFullscreen) BOOL fullscreen;
+- (void)exitFullscreen;
+// Called by the Display handler when the page enters or leaves HTML fullscreen.
+- (void)pageFullscreenChanged:(BOOL)fullscreen;
+@end
 
 // [Download]
 
@@ -63,6 +74,13 @@ NS_ASSUME_NONNULL_BEGIN
 // [Find]
 
 // [Focus]
+@interface CCChromiumTab (Focus)
+// Gives the page keyboard focus (tab switch, pane focus, after the command bar closes).
+- (void)focusContent;
+// Focus the page after the tab joins a window, unless something in the shell is being edited.
+- (void)restoreContentFocus;
+- (void)enableSpellChecking;
+@end
 
 // [JSDialog]
 
