@@ -15,6 +15,15 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
       const CefString&, bool&) override {
     return resource_;
   }
+  // Middle- and Cmd-click reach here (not OnBeforePopup); without this CEF navigates the source tab.
+  bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString& url,
+                        WindowOpenDisposition disposition, bool gesture) override {
+    bool background = disposition == CEF_WOD_NEW_BACKGROUND_TAB;
+    if (!background && disposition != CEF_WOD_NEW_FOREGROUND_TAB && disposition != CEF_WOD_NEW_WINDOW) return false;
+    auto tab = owner;
+    if (gesture) [tab.delegate chromiumTab:tab popup:String(url) activate:!background];
+    return true;
+  }
   void OnRenderProcessTerminated(CefRefPtr<CefBrowser>, TerminationStatus, int code,
                                  const CefString& error) override {
     auto tab = owner;

@@ -69,6 +69,23 @@ NS_ASSUME_NONNULL_BEGIN
 // [Keyboard]
 
 // [LifeSpan]
+typedef NS_ENUM(NSInteger, CCPopupDisposition) {
+  CCPopupDispositionForeground,
+  CCPopupDispositionBackground,
+  CCPopupDispositionUnsupported,
+};
+
+@protocol CCChromiumTabLifeSpanDelegate <NSObject>
+// Asked synchronously on the main thread while CEF creates a popup. Return the tab that adopts it
+// (created with -initAdoptingPopupFromTab:), or nil to cancel the popup.
+- (nullable CCChromiumTab *)chromiumTab:(CCChromiumTab *)tab hostsPopup:(NSString *)url
+                            disposition:(CCPopupDisposition)disposition userGesture:(BOOL)userGesture;
+@end
+
+@interface CCChromiumTab (LifeSpan)
+// A tab for a popup CEF creates itself: same profile and request context as `opener`, no CreateBrowser call.
+- (instancetype)initAdoptingPopupFromTab:(CCChromiumTab *)opener;
+@end
 
 // [Load]
 

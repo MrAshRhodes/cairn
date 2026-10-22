@@ -275,6 +275,14 @@ struct BrowserView: View {
                     Button("Try Again") { model.liveTab(for: id)?.reload(ignoringCache: false) }
                 }.padding(16).background(Color.orange.opacity(0.1))
             }
+            if let blocked = model.blockedPopups[id], blocked > 0 {
+                HStack {
+                    Image(systemName: "rectangle.on.rectangle.slash")
+                    Text(blocked == 1 ? "A popup was blocked" : "\(blocked) popups were blocked").font(.callout)
+                    Spacer()
+                    Button("Dismiss") { model.dismissBlockedPopups(id) }
+                }.padding(12).background(Color.yellow.opacity(0.12))
+            }
             if model.item(id)?.url == nil {
                 StartPage(services: services, tabID: id)
             } else {
