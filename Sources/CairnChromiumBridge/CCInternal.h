@@ -61,6 +61,7 @@ typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
 - (void)received:(int)identifier success:(BOOL)success data:(NSData *)data;
 - (void)cancelReplies:(NSString *)reason;
 - (void)drainNavigation;
+- (void)applyAudioMuted;
 // The CEF browser, or null until CEF created it. Categories (CCTab+<Feature>.mm) cannot see the
 // tab's ivars, so they reach CEF through this.
 - (CefRefPtr<CefBrowser>)cefBrowser;

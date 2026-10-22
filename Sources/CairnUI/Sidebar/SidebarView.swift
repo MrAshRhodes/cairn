@@ -146,6 +146,13 @@ public struct SidebarView: View {
                             tabIcon(tab).frame(width: 20)
                             Text(tab.displayTitle).lineLimit(1).font(.system(size: 13))
                             Spacer(minLength: 0)
+                            if let media = model.mediaStates[tab.id], media.showsIndicator {
+                                Button { model.toggleMute(tab.id) } label: {
+                                    Image(systemName: media.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                        .font(.system(size: 11)).foregroundStyle(media.isMuted ? .secondary : accent)
+                                }.buttonStyle(.plain).help(media.isMuted ? "Unmute Tab" : "Mute Tab")
+                                    .accessibilityLabel(media.isMuted ? "Unmute tab" : "Mute tab")
+                            }
                             if model.tabStates[tab.id]?.isLoading == true {
                                 ProgressView().controlSize(.mini).accessibilityLabel("Loading")
                             }
@@ -205,7 +212,7 @@ public struct SidebarView: View {
     }
 
     @ViewBuilder private func tabIcon(_ tab: TabItem) -> some View {
-        if let image = model.favicons[tab.id] {
+        if let image = model.favicon(for: tab) {
             Image(nsImage: image).resizable().scaledToFit().frame(width: 17, height: 17).accessibilityHidden(true)
         } else { Image(systemName: tab.url == nil ? "circle.dotted" : "globe").foregroundStyle(.secondary).accessibilityHidden(true) }
     }

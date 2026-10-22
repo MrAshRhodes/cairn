@@ -68,6 +68,7 @@ using namespace cc;
   native.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   native.frame = self.view.bounds;
   browser->GetHost()->SetZoomLevel(std::log(_zoom) / std::log(1.2));
+  [self applyAudioMuted];
   self.scriptOperations = 1;
   __weak CCChromiumTab *weakSelf = self;
   [self call:@"Page.enable" params:@{} reply:^(NSDictionary *, NSError *error) {
