@@ -327,7 +327,8 @@ void ApplyPendingProfileWork(NSString *root) {
         auto manager = context->GetCookieManager(nullptr);
         return manager && manager->DeleteCookies("", "", new CookiesDone(leave));
       }, gaveUp);
-      context->ClearHttpAuthCredentials(nullptr);
+      job->Enter();
+      context->ClearHttpAuthCredentials(new Done(^{ job->Leave(); }));
     }
   }
   if (cache) {

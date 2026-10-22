@@ -6,12 +6,14 @@ enum SmokeError: Error { case failed(String) }
 
 @MainActor final class Smoke: NSObject, EngineTabDelegate {
     let engine: ChromiumEngine
+    let root: URL
     let base: URL
     var windows: [NSWindow] = []
     var tabs: [EngineTab] = []
     var popups = 0
 
     init(root: URL, base: URL) {
+        self.root = root
         self.base = base
         engine = ChromiumEngine(dataRoot: root)
     }
@@ -160,6 +162,7 @@ enum SmokeError: Error { case failed(String) }
             try await wait { !first.state.isLoading && first.state.url == self.base }
             await engine.clearBrowsingData(profileID: "first", kinds: [.cookies, .cache])
             try require(try await js(first, "document.cookie === ''") as? Bool == true, "profile cookie removal completes")
+            try await siteDataScenario()
             _ = try await js(first, "window.open('/popup'); true")
             try await Task.sleep(nanoseconds: 200_000_000)
             try require(popups == 0, "unsolicited popup is blocked")
