@@ -36,6 +36,8 @@ class Application final : public CefApp, public CefBrowserProcessHandler {
     // Without this, an unattended run blocks forever on a Keychain authorization prompt
     // for the "Chromium Safe Storage" item and no page ever commits.
     if (useMockKeychain && process_type.empty()) command_line->AppendSwitch("use-mock-keychain");
+    // Lets CefRequestHandler::GetAuthCredentials see HTTP authentication instead of Chromium's own prompt.
+    if (process_type.empty()) command_line->AppendSwitch("disable-chrome-login-prompt");
   }
   void OnContextInitialized() override { ready = true; }
   void OnScheduleMessagePumpWork(int64_t delay) override {

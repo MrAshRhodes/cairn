@@ -18,6 +18,8 @@
     <key>NSPrincipalClass</key><string>NSApplication</string>
     <key>NSCameraUsageDescription</key><string>Allow a website you choose to use your camera.</string>
     <key>NSMicrophoneUsageDescription</key><string>Allow a website you choose to use your microphone.</string>
+    <key>NSLocationUsageDescription</key><string>Allow a website you choose to know your approximate location.</string>
+    <key>NSLocationWhenInUseUsageDescription</key><string>Allow a website you choose to know your approximate location.</string>
     <key>CFBundleURLTypes</key>
     <array><dict>
         <key>CFBundleURLName</key><string>Web address</string>

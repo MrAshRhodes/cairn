@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Build and run a local bundled, sandbox-enabled smoke test (requires a macOS GUI session)."""
 import argparse
+import base64
 import http.server
 import json
 import os
@@ -8,6 +9,7 @@ import pathlib
 import platform
 import plistlib
 import shutil
+import ssl
 import subprocess
 import threading
 import uuid
@@ -19,6 +21,8 @@ from tool import ROOT
 class Fixture(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         content_type = "text/html; charset=utf-8"
+        if self.path.startswith("/prompts/"):
+            return self.prompts_fixture()
         if self.path == "/probe.json":
             body = json.dumps({"userAgent": self.headers.get("User-Agent", "")}).encode()
             content_type = "application/json"
@@ -26,6 +30,38 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             body = (ROOT / "engine/fixtures/rendering.html").read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def prompts_fixture(self):
+        """Local pages for the permission, dialog and HTTP-auth checks (engine/smoke/PromptChecks.swift)."""
+        status, headers, body = 200, {}, b"<!doctype html><title>prompts</title><p>fixture</p>"
+        if self.path.startswith("/prompts/auth"):
+            if self.headers.get("Authorization") == "Basic " + base64.b64encode(b"ada:secret").decode():
+                body = b"<!doctype html><title>authed</title><p>signed in</p>"
+            else:
+                status, headers = 401, {"WWW-Authenticate": 'Basic realm="Cairn Smoke"'}
+                body = b"<!doctype html><title>denied</title><p>denied</p>"
+        self.send_response(status)
+        for name, value in headers.items():
+            self.send_header(name, value)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+class TLSFixture(http.server.BaseHTTPRequestHandler):
+    """Served over a self-signed certificate: the browser must refuse it."""
+
+    def do_GET(self):
+        body = b"<!doctype html><title>TLS fixture reached</title><p>TLS fixture reached</p>"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -80,6 +116,16 @@ def main():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", "/CN=localhost",
+                    "-addext", "subjectAltName=DNS:localhost", "-keyout", str(work / "tls.key"), "-out", str(work / "tls.crt")],
+                   check=True, capture_output=True)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(work / "tls.crt", work / "tls.key")
+    tls_server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TLSFixture)
+    tls_server.socket = context.wrap_socket(tls_server.socket, server_side=True)
+    tls_thread = threading.Thread(target=tls_server.serve_forever, daemon=True)
+    tls_thread.start()
+    env["CAIRN_SMOKE_TLS_URL"] = f"https://localhost:{tls_server.server_port}/"
     env["CAIRN_SMOKE_DATA_ROOT"] = str(work / "profiles")
     env["CAIRN_SMOKE_SNAPSHOT"] = str(work / "rendering.png")
     env["CAIRN_SMOKE_CHROMIUM_MAJOR"] = json.loads((ROOT / "engine/cef.lock.json").read_text())["chromium_version"].split(".")[0]
@@ -104,6 +150,9 @@ def main():
         server.shutdown()
         server.server_close()
         thread.join()
+        tls_server.shutdown()
+        tls_server.server_close()
+        tls_thread.join()
 
 
 if __name__ == "__main__":
