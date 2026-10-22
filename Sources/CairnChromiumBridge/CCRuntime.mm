@@ -35,6 +35,10 @@ class Application final : public CefApp, public CefBrowserProcessHandler {
                                      CefRefPtr<CefCommandLine> command_line) override {
     // Without this, an unattended run blocks forever on a Keychain authorization prompt
     // for the "Chromium Safe Storage" item and no page ever commits.
+    // Chromium's built-in blocker makes window.open() return null without telling the browser. Turning it
+    // off routes every attempt to OnBeforePopup (CCLifeSpanHandler.mm), where Cairn's popup policy blocks
+    // or adopts it and the user can see what was blocked.
+    if (process_type.empty()) command_line->AppendSwitch("disable-popup-blocking");
     if (useMockKeychain && process_type.empty()) command_line->AppendSwitch("use-mock-keychain");
   }
   void OnContextInitialized() override { ready = true; }

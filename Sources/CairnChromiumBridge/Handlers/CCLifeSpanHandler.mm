@@ -44,8 +44,7 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
                      const CefString& url, const CefString&, WindowOpenDisposition disposition,
                      bool gesture, const CefPopupFeatures&, CefWindowInfo& window, CefRefPtr<CefClient>& client,
                      CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
-    for (auto it = pendingPopups_.begin(); it != pendingPopups_.end();)
-    {
+    for (auto it = pendingPopups_.begin(); it != pendingPopups_.end();) {
       CCChromiumTab *pending = it->second;
       it = pending && pending.cefBrowser ? pendingPopups_.erase(it) : std::next(it);
     }

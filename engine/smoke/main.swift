@@ -10,6 +10,9 @@ enum SmokeError: Error { case failed(String) }
     var windows: [NSWindow] = []
     var tabs: [EngineTab] = []
     var popups = 0
+    var popupTabs: [EngineTab] = []
+    var blockedPopups = 0
+    var closeRequests: [UUID] = []
 
     init(root: URL, base: URL) {
         self.base = base
@@ -163,6 +166,7 @@ enum SmokeError: Error { case failed(String) }
             _ = try await js(first, "window.open('/popup'); true")
             try await Task.sleep(nanoseconds: 200_000_000)
             try require(popups == 0, "unsolicited popup is blocked")
+            try await checkPopups()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
@@ -179,7 +183,7 @@ enum SmokeError: Error { case failed(String) }
     func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) {}
     func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) { popups += 1 }
     func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) {}
-    func engineTabDidRequestClose(_ tab: EngineTab) { tab.close() }
+    func engineTabDidRequestClose(_ tab: EngineTab) { closeRequests.append(tab.id); tab.close() }
 }
 
 MainActor.assumeIsolated {

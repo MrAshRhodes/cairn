@@ -19,7 +19,9 @@ from tool import ROOT
 class Fixture(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         content_type = "text/html; charset=utf-8"
-        if self.path == "/probe.json":
+        if self.path.startswith("/popups/"):
+            body = (ROOT / "engine/fixtures/popups.html").read_bytes()
+        elif self.path == "/probe.json":
             body = json.dumps({"userAgent": self.headers.get("User-Agent", "")}).encode()
             content_type = "application/json"
         else:
