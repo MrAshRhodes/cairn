@@ -1,12 +1,14 @@
 // CCRuntime.mm — CEF process lifecycle: library loading, initialization, the external message pump,
 // request contexts (one per Space profile), profile clearing and shutdown.
 #import "CCInternal.h"
+#import "Handlers/CCPending.h"
 #import <crt_externs.h>
 #include <algorithm>
 #include <atomic>
 #include <climits>
 #include <cstdlib>
 #include <memory>
+#include <unistd.h>
 #include "include/cef_application_mac.h"
 #include "include/cef_version.h"
 #include "include/wrapper/cef_library_loader.h"
@@ -17,7 +19,8 @@ namespace {
 bool terminated = false;
 // Read by the watchdog on a background queue; set once the shutdown completions have run.
 std::atomic<bool> shutdownCompleted{false};
-constexpr int64_t kForcedShutdownSeconds = 4;
+std::atomic<bool> shuttingDownCEF{false};
+constexpr int64_t kCloseWarningSeconds = 4;
 constexpr int64_t kHardExitSeconds = 10;
 bool useMockKeychain = false;
 typedef void (^ShutdownCompletion)(void);
@@ -109,30 +112,25 @@ CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral) {
   return context;
 }
 
-void FinishShutdown(bool force) {
+void FinishShutdown() {
   if (!running || !stopping) return;
-  if (!force && (!clients.empty() || pendingBrowsers)) return;
+  if (!clients.empty() || pendingBrowsers) return;
   // A nested run loop can drain this block from inside CefDoMessageLoopWork; CefShutdown must not run there.
-  if (pumping) { dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(force); }); return; }
-  if (force) {
-    NSLog(@"Cairn: forcing Chromium shutdown with %zu open and %d pending browsers.", clients.size(), pendingBrowsers);
-    for (auto& pair : clients) pair.second->browser = nullptr;
-    clients.clear();
-    pendingBrowsers = 0;
-  }
+  if (pumping) { dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); }); return; }
   running = false;
   ready = false;
   [pumpTimer invalidate];
   pumpTimer = nil;
   contexts.clear();
   ReleaseDownloads();
+  shuttingDownCEF = true;
   CefShutdown();
   library.reset();
   terminated = true; // CEF may only be initialized once per process.
   NSArray<ShutdownCompletion> *completions = [shutdownCompletions copy];
   shutdownCompletions = nil;
-  shutdownCompleted = true;
   for (ShutdownCompletion completion in completions) completion();
+  shutdownCompleted = true;
 }
 }
 
@@ -222,31 +220,46 @@ void FinishShutdown(bool force) {
           CHROME_VERSION_MAJOR, CHROME_VERSION_MINOR, CHROME_VERSION_BUILD, CHROME_VERSION_PATCH, CEF_VERSION];
 }
 + (void)shutdown {
+  NSAssert(NSThread.isMainThread, @"CEF must shut down on the main thread");
   if (!running || stopping) return;
   stopping = true;
+  // Arm before any CEF calls: CloseBrowser/callback cancellation can also stop making progress.
+  // Never call CefShutdown with live browsers or unresolved creations. A failed quit must not
+  // masquerade as a clean exit or invoke completion handlers that claim Chromium flushed its data.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kHardExitSeconds * NSEC_PER_SEC),
+                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    if (shutdownCompleted) return;
+    const char *phase = shuttingDownCEF ? "CEF teardown/completion" : "browser close/creation";
+    NSLog(@"Cairn: Chromium shutdown FAILED after %lld s (%s); terminating with failure. "
+           "Chromium data may not have been flushed.", kHardExitSeconds, phase);
+    static const char diagnostic[] =
+        "Cairn: Chromium shutdown timed out; unclean termination (exit 1). Data may not be flushed.\n";
+    (void)write(STDERR_FILENO, diagnostic, sizeof(diagnostic) - 1);
+    _exit(EXIT_FAILURE);
+  });
+  ReleaseDownloads();
   auto snapshot = clients;
   for (const auto& pair : snapshot) {
     auto client = pair.second;
     client->owner.closing = YES;
+    CancelPending(client->owner);
     if (client->browser) client->browser->GetHost()->CloseBrowser(true);
   }
   if (clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
-  // A browser that never finishes closing or creating must not hold the app open forever.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kForcedShutdownSeconds * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-    if (running && stopping) FinishShutdown(true);
-  });
-  // CefShutdown can block the main thread, so the last resort runs elsewhere. Workspace and history are flushed
-  // before the approved quit reaches this point.
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kHardExitSeconds * NSEC_PER_SEC),
-                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-    if (shutdownCompleted) return;
-    NSLog(@"Cairn: Chromium shutdown did not finish within %lld s; exiting.", kHardExitSeconds);
-    _exit(0);
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kCloseWarningSeconds * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    if (!running || !stopping) return;
+    NSLog(@"Cairn: still waiting for Chromium shutdown: %zu open and %d pending browsers. "
+           "Refusing unsafe CEF teardown.", clients.size(), pendingBrowsers);
+    auto remaining = clients;
+    for (const auto& pair : remaining) {
+      if (pair.second->browser) pair.second->browser->GetHost()->CloseBrowser(true);
+    }
+    FinishShutdown();
   });
 }
 + (void)shutdownWithCompletion:(void (^)(void))completion {
   NSAssert(NSThread.isMainThread, @"CEF must shut down on the main thread");
-  if (!running) {
+  if (terminated || (!running && !stopping)) {
     dispatch_async(dispatch_get_main_queue(), completion);
     return;
   }

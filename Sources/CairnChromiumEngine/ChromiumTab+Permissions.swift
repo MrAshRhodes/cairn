@@ -66,4 +66,7 @@ extension ChromiumTab: @preconcurrency CCChromiumTabRequestDelegate {
             url: parsed, code: code, subject: subject.isEmpty ? nil : subject, issuer: issuer.isEmpty ? nil : issuer,
             validFrom: date(validFrom), validUntil: date(validUntil)))
     }
+    func chromiumTab(_ tab: CCChromiumTab, dismissesAuthentication requestID: String) {
+        promptEvents?.engineTab(self, dismissesAuthentication: requestID)
+    }
 }

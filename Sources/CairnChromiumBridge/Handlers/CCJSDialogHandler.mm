@@ -25,7 +25,7 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
                   const CefString& defaultText, CefRefPtr<CefJSDialogCallback> callback,
                   bool& suppress) override {
     auto tab = owner;
-    if (!tab) return false;
+    if (!tab || tab.closing || stopping || tab.cefBrowser != browser) { suppress = true; return false; }
     NSString *suppressKey = SuppressKey(browser);
     auto pending = Pending(tab);
     for (NSString *key in [pending.allKeys copy]) {
@@ -36,20 +36,22 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
     return Forward(tab, name, String(message), String(defaultText), String(origin), false, callback);
   }
 
-  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser>, const CefString& message, bool isReload,
+  bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser, const CefString& message, bool isReload,
                             CefRefPtr<CefJSDialogCallback> callback) override {
     auto tab = owner;
-    if (!tab) return false;
+    if (!tab || tab.closing || stopping || tab.cefBrowser != browser) {
+      callback->Continue(true, CefString()); return true;
+    }
     return Forward(tab, @"beforeUnload", String(message), @"", @"", isReload, callback);
   }
 
-  void OnResetDialogState(CefRefPtr<CefBrowser>) override {
+  void OnResetDialogState(CefRefPtr<CefBrowser> browser) override {
     auto tab = owner;
-    if (!tab) return;
+    if (!tab || tab.cefBrowser != browser) return;
     auto pending = Pending(tab);
     for (NSString *key in [pending.allKeys copy]) {
       if (![key hasPrefix:@"js"]) continue;
-      [pending removeObjectForKey:key];
+      Answer(tab, key, nil);
       if ([tab.delegate conformsToProtocol:@protocol(CCChromiumTabJSDialogDelegate)])
         [(id<CCChromiumTabJSDialogDelegate>)tab.delegate chromiumTab:tab dismissesJSDialog:key];
     }
@@ -63,7 +65,7 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
       callback->Continue(false, CefString());
       return true;
     }
-    NSString *requestID = [NSString stringWithFormat:@"js%llu", ++counter_];
+    NSString *requestID = [@"js" stringByAppendingString:NSUUID.UUID.UUIDString];
     Pending(tab)[requestID] = [^(NSDictionary *answer) {
       NSString *text = answer[@"text"];
       callback->Continue([answer[@"accept"] boolValue], text ? CefString(text.UTF8String) : CefString());
@@ -73,7 +75,6 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
     return true;
   }
 
-  uint64_t counter_ = 0;
   IMPLEMENT_REFCOUNTING(JSDialogHandler);
 };
 }
@@ -85,6 +86,8 @@ CefRefPtr<CefJSDialogHandler> MakeJSDialogHandler(Client& client) { return new J
 @implementation CCChromiumTab (JSDialog)
 - (void)resolveJSDialog:(NSString *)requestID accept:(BOOL)accept text:(NSString *)text
         suppressFurther:(BOOL)suppressFurther {
+  // A delayed answer from a dismissed card must not silence the newly navigated page.
+  if (!cc::Pending(self)[requestID]) return;
   if (suppressFurther) cc::Pending(self)[cc::SuppressKey(self.cefBrowser)] = ^(NSDictionary *) {};
   NSMutableDictionary *answer = [@{@"accept": @(accept)} mutableCopy];
   if (text) answer[@"text"] = text;

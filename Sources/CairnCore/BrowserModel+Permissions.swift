@@ -82,7 +82,8 @@ extension BrowserModel: EngineTabPromptEvents {
     /// Answers the permission prompt at the front of a tab. `remember` stores the choice for the site in this
     /// Space; without it the answer applies to this request only.
     public func answerPermission(_ requestID: String, tab id: UUID, allow: Bool, remember: Bool) {
-        guard case .permission(let request)? = prompts.remove(requestID, tab: id) else { return }
+        guard case .permission(let request)? = prompts.front(id), request.id == requestID else { return }
+        prompts.remove(requestID, tab: id)
         if remember, let profile = liveProfileIDs[id] {
             for kind in request.kinds {
                 sitePermissions.set(allow ? .allow : .block, profileID: profile, origin: request.origin, kind: kind)
@@ -103,7 +104,8 @@ extension BrowserModel: EngineTabPromptEvents {
         if let id = itemID(forPromptTab: tab) { prompts.remove(requestID, tab: id) }
     }
     public func answerJSDialog(_ requestID: String, tab id: UUID, accept: Bool, text: String? = nil, suppressFurther: Bool = false) {
-        guard prompts.remove(requestID, tab: id) != nil else { return }
+        guard case .jsDialog(let request)? = prompts.front(id), request.id == requestID else { return }
+        prompts.remove(requestID, tab: id)
         responder(id)?.resolveJSDialog(id: requestID, accept: accept, text: text, suppressFurther: suppressFurther)
     }
 
@@ -115,9 +117,13 @@ extension BrowserModel: EngineTabPromptEvents {
         }
         prompts.enqueue(.authentication(request), tab: id)
     }
+    public func engineTab(_ tab: EngineTab, dismissesAuthentication requestID: String) {
+        if let id = itemID(forPromptTab: tab) { prompts.remove(requestID, tab: id) }
+    }
     /// Credentials go to the engine for this request only and are never stored. `nil` cancels.
     public func answerAuthentication(_ requestID: String, tab id: UUID, username: String?, password: String?) {
-        guard prompts.remove(requestID, tab: id) != nil else { return }
+        guard case .authentication(let request)? = prompts.front(id), request.id == requestID else { return }
+        prompts.remove(requestID, tab: id)
         responder(id)?.resolveAuthentication(id: requestID, username: username, password: password)
     }
 
@@ -140,7 +146,10 @@ extension BrowserModel: EngineTabPromptEvents {
     }
 
     func cancelPrompts(for id: UUID) {
-        for prompt in prompts.queues[id] ?? [] {
+        let pending = prompts.queues[id] ?? []
+        // CEF completion can synchronously re-enter the model. Discard stale UI before answering.
+        prompts.removeTab(id)
+        for prompt in pending {
             switch prompt {
             case .permission(let request): responder(id)?.resolvePermission(id: request.id, allow: false)
             case .jsDialog(let request):
@@ -149,6 +158,5 @@ extension BrowserModel: EngineTabPromptEvents {
                 responder(id)?.resolveAuthentication(id: request.id, username: nil, password: nil)
             }
         }
-        prompts.removeTab(id)
     }
 }

@@ -109,7 +109,7 @@ extern std::map<std::string, int> creating;
 NSString *String(const CefString& value);
 NSError *Failure(NSString *message);
 CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral);
-void FinishShutdown(bool force = false);
+void FinishShutdown();
 NSString *ProfileRoot();
 // CCRuntime+SiteData.mm: deferred deletions at launch, and the per-profile list of visited origins.
 void ApplyPendingProfileWork(NSString *root);

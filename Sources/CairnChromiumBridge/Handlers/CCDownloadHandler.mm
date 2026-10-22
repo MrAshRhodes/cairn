@@ -5,6 +5,7 @@
 // download outlives its tab, so state is process-wide and never refers to the originating browser.
 #import "../CCInternal.h"
 #include <map>
+#include <set>
 
 namespace cc {
 namespace {
@@ -16,6 +17,9 @@ struct LiveDownload {
   bool lastPaused = false;
 };
 std::map<uint32_t, LiveDownload> live;
+// UI destination choices must not retain a CEF callback after runtime shutdown.
+std::map<uint32_t, CefRefPtr<CefBeforeDownloadCallback>> pendingChoices;
+std::set<uint32_t> cancellingAtShutdown;
 // Chromium re-enters OnBeforeDownload when it auto-resumes an interrupted download; reuse the user's choice.
 std::map<uint32_t, std::string> chosen;
 
@@ -41,6 +45,7 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
 
   bool OnBeforeDownload(CefRefPtr<CefBrowser>, CefRefPtr<CefDownloadItem> item,
                         const CefString& suggested, CefRefPtr<CefBeforeDownloadCallback> callback) override {
+    if (stopping) return true;
     auto tab = owner;
     id<CCChromiumDownloadDelegate> delegate = CCChromiumDownloads.delegate;
     if (!delegate) {
@@ -63,15 +68,17 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
       @"ephemeral": @(tab.ephemeral),
     };
     uint32_t identifier = item->GetId();
-    __block CefRefPtr<CefBeforeDownloadCallback> pending = callback;
+    pendingChoices[identifier] = callback;
     [delegate chromiumDownloadWillStart:info decide:^(NSString *path) {
-      if (!pending) return;
+      auto found = pendingChoices.find(identifier);
+      if (found == pendingChoices.end()) return;
+      CefRefPtr<CefBeforeDownloadCallback> pending = found->second;
+      pendingChoices.erase(found);
       // Releasing the callback without Continue cancels the download.
-      if (path.length) {
+      if (path.length && !stopping) {
         chosen[identifier] = path.UTF8String;
         pending->Continue(CefString(path.UTF8String), false);
       }
-      pending = nullptr;
     }];
     return true; // Swift must always decide: an unanswered callback leaves the download pending.
   }
@@ -80,9 +87,15 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
                          CefRefPtr<CefDownloadItemCallback> callback) override {
     if (!item->IsValid()) return;
     uint32_t identifier = item->GetId();
+    if (stopping) {
+      if (!item->IsComplete() && !item->IsCanceled() && !item->IsInterrupted() &&
+          cancellingAtShutdown.insert(identifier).second) callback->Cancel();
+      return;
+    }
     if (item->IsComplete() || item->IsCanceled() || item->IsInterrupted()) {
       live.erase(identifier);
       chosen.erase(identifier);
+      pendingChoices.erase(identifier);
     } else {
       LiveDownload& entry = live[identifier];
       entry.callback = callback;
@@ -102,8 +115,14 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
 }
 
 void ReleaseDownloads() {
+  // Move first because Cancel can re-enter OnDownloadUpdated.
+  auto active = std::move(live);
   live.clear();
+  pendingChoices.clear();
   chosen.clear();
+  for (const auto& pair : active) {
+    if (cancellingAtShutdown.insert(pair.first).second) pair.second.callback->Cancel();
+  }
 }
 
 CefRefPtr<CefDownloadHandler> MakeDownloadHandler(Client& client) { return new DownloadHandler(client); }
@@ -116,6 +135,7 @@ static __weak id<CCChromiumDownloadDelegate> downloadDelegate;
 + (id<CCChromiumDownloadDelegate>)delegate { return downloadDelegate; }
 + (void)setDelegate:(id<CCChromiumDownloadDelegate>)delegate { downloadDelegate = delegate; }
 + (void)cancel:(uint32_t)identifier {
+  cc::pendingChoices.erase(identifier);
   auto found = cc::live.find(identifier);
   if (found != cc::live.end()) found->second.callback->Cancel();
 }

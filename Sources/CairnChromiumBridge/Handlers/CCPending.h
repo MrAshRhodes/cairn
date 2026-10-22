@@ -1,7 +1,7 @@
 // CCPending.h — answers that CEF callbacks are waiting for, kept per tab.
 //
-// A block stored here owns the CEF callback it will complete, so closing the tab (and with it this
-// dictionary) releases anything the page was still waiting on. Main thread only.
+// A block stored here owns the CEF callback it will complete. Navigation, close and shutdown
+// explicitly cancel it and dismiss the corresponding UI. Main thread only.
 #pragma once
 #import "../CCInternal.h"
 #import <objc/runtime.h>
@@ -31,6 +31,25 @@ inline bool Answer(CCChromiumTab *tab, NSString *requestID, NSDictionary *answer
   [pending removeObjectForKey:requestID];
   block(answer);
   return true;
+}
+
+inline void CancelPending(CCChromiumTab *tab) {
+  if (!tab) return;
+  auto pending = Pending(tab);
+  NSDictionary<NSString *, PendingAnswer> *snapshot = [pending copy];
+  // Clear before completing: CEF callbacks and Swift dismissal can synchronously re-enter.
+  [pending removeAllObjects];
+  for (NSString *key in snapshot) {
+    if ([key hasPrefix:@"suppress:"]) continue;
+    snapshot[key](nil);
+    if ([key hasPrefix:@"js"] && [tab.delegate conformsToProtocol:@protocol(CCChromiumTabJSDialogDelegate)])
+      [(id<CCChromiumTabJSDialogDelegate>)tab.delegate chromiumTab:tab dismissesJSDialog:key];
+    else if ([key hasPrefix:@"a"] && [tab.delegate respondsToSelector:@selector(chromiumTab:dismissesAuthentication:)])
+      [(id<CCChromiumTabRequestDelegate>)tab.delegate chromiumTab:tab dismissesAuthentication:key];
+    else if (([key hasPrefix:@"m"] || [key hasPrefix:@"p"]) &&
+             [tab.delegate conformsToProtocol:@protocol(CCChromiumTabPermissionDelegate)])
+      [(id<CCChromiumTabPermissionDelegate>)tab.delegate chromiumTab:tab dismissesPermission:key];
+  }
 }
 
 }  // namespace cc

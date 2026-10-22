@@ -1,6 +1,7 @@
 // CCTab.mm — CCChromiumTab: the browser view, navigation, DevTools calls with replies and timeouts,
 // user scripts, find-in-page and snapshots. Feature-specific tab commands belong in CCTab+<Feature>.mm.
 #import "CCInternal.h"
+#import "Handlers/CCPending.h"
 #include <algorithm>
 #include <cmath>
 #include "include/cef_parser.h"
@@ -87,15 +88,12 @@ NSTimeInterval NavigationWatchdogSeconds() {
     creating[_client->contextKey]--;
     _client = nullptr; self.state[@"error"] = @"CEF failed to create an embedded browser."; [self publish]; return;
   }
-  // A creation that never reaches OnAfterCreated must not leak the counter that gates shutdown.
+  // Stop waiting in the UI, but keep accepted creation counted until CEF completes it.
   CefRefPtr<Client> pending = _client;
   __weak CCChromiumTab *weakSelf = self;
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
     if (!pending->creationPending) return;
-    pending->creationPending = false;
     pending->abandoned = true;
-    pendingBrowsers--;
-    creating[pending->contextKey]--;
     NSLog(@"Cairn: Chromium did not finish creating a browser within 20 s; abandoning it.");
     CCChromiumTab *tab = weakSelf;
     if (!tab) return;
@@ -363,7 +361,9 @@ NSTimeInterval NavigationWatchdogSeconds() {
 }
 - (void)close {
   if (self.closing) return;
-  self.closing = YES; self.pendingURL = nil; ++_navigationToken;
+  self.closing = YES;
+  cc::CancelPending(self);
+  self.pendingURL = nil; ++_navigationToken;
   [self exitFullscreen];
   [self cancelReplies:@"Tab closed"];
   if (_client && _client->browser) _client->browser->GetHost()->CloseBrowser(true);
