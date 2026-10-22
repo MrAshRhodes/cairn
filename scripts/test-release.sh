@@ -5,10 +5,10 @@ cd "$(dirname "$0")/.."
 unset SPARKLE_PRIVATE_ED_KEY SPARKLE_KEYCHAIN_ACCOUNT
 work="$PWD/.build/release-tests"
 mkdir -p "$work"
-for script in scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/run-smoke.sh scripts/*release*.sh; do
+for script in scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/run-smoke.sh scripts/chromium-issue.sh scripts/*release*.sh; do
   bash -n "$script"
 done
-shellcheck scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/run-smoke.sh scripts/*release*.sh
+shellcheck scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/run-smoke.sh scripts/chromium-issue.sh scripts/*release*.sh
 python3 - <<'PY'
 import ast
 from pathlib import Path
@@ -36,6 +36,8 @@ python3 Resources/ReleaseTools/ReleasePipelineTests.py
 python3 Resources/ReleaseTools/VerifyBundleTests.py
 # The CI smoke wrapper: retries only the documented teardown flake, keeps logs and crash reports.
 python3 Resources/ReleaseTools/RunSmokeTests.py
+# The Chromium tracking issue: opened, refreshed and closed from the maintenance report (fake gh; nothing is contacted).
+python3 Resources/ReleaseTools/ChromiumIssueTests.py
 # RFC 8032 public key + signature for an empty message; private material is never needed.
 public_key="11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 signature="5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="

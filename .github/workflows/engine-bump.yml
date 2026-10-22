@@ -17,6 +17,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      status: ${{ steps.check.outputs.status }}
       update: ${{ steps.check.outputs.update }}
       gap: ${{ steps.check.outputs.gap }}
     steps:
@@ -28,56 +29,104 @@ jobs:
       - name: Compare stable CEF and Chrome
         id: check
         run: |
-          mkdir -p engine/.cache
-          python3 engine/tool.py check --report engine/.cache/status.json
+          mkdir -p chromium-status
+          # The tool also writes both reports when it fails (status "failed"), so the outputs, summary and tracking
+          # issue below always have something to report; the exit code is applied at the end.
+          code=0
+          python3 engine/tool.py check --report chromium-status/status.json --markdown chromium-status/status.md || code=$?
           python3 - <<'PY'
           import json, os
           from pathlib import Path
-          report = json.loads(Path("engine/.cache/status.json").read_text())
+          path = Path("chromium-status/status.json")
+          report = json.loads(path.read_text()) if path.exists() else {"status": "failed"}
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
-              output.write(f"update={str(report['update_available']).lower()}\n")
-              output.write(f"gap={str(report['security_gap']).lower()}\n")
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              summary.write("## Chromium security monitor\n```json\n" + json.dumps(report, indent=2) + "\n```\n")
-          if report["security_gap"]:
+              output.write(f"status={report['status']}\n")
+              output.write(f"update={str(bool(report.get('update_available'))).lower()}\n")
+              output.write(f"gap={str(bool(report.get('security_gap'))).lower()}\n")
+          summary = Path("chromium-status/status.md")
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as out:
+              out.write(summary.read_text() if summary.exists() else "## Chromium maintenance check failed\n")
+          if report.get("security_gap"):
               print("::warning::SECURITY GAP: CEF is behind Chrome stable. See summary; do not describe this engine as current Chrome.")
+          if report.get("missing_architectures"):
+              print("::warning::ARCHITECTURE GAP: " + ", ".join(report["missing_architectures"]) + " has no build of the newest stable CEF yet; the pin can only move to a build both architectures publish.")
           PY
+          exit "$code"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: ${{ always() }}
+        with:
+          name: chromium-status
+          path: chromium-status
+          if-no-files-found: ignore
+          retention-days: 14
 
   propose:
     needs: check
     if: needs.check.outputs.update == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     permissions:
       contents: write
       pull-requests: write
+      actions: write
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Pin latest common stable build
-        run: python3 engine/tool.py update
+      - name: Pin the newest stable build published for both architectures
+        run: |
+          mkdir -p chromium-status
+          python3 engine/tool.py update --report chromium-status/update.json --markdown chromium-status/update.md
+      # The CEF index only publishes SHA-1: download both archives (size and SHA-1 verified) and record their SHA-256.
+      - name: Record the SHA-256 of both archives
+        run: python3 engine/tool.py hash
+      - name: Offline tests against the new pin
+        run: python3 -m unittest discover -s engine/tests -v
+      - name: Describe the change
+        run: cat chromium-status/update.md .github/chromium-bump-pr.md > chromium-status/pr-body.md
       - uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8
+        id: pr
         with:
           branch: maintenance/cef-stable
           title: 'Update pinned CEF stable (manual security review required)'
           commit-message: 'Update pinned CEF stable archives'
           add-paths: engine/cef.lock.json
+          labels: chromium-security
           draft: always-true
-          body: |
-            The stable CEF archive pin changed for both macOS architectures.
-            This is NOT proof of Chrome security parity. Review the Chromium maintenance run summary.
-            No automatic merge is configured.
+          body-path: chromium-status/pr-body.md
+      # Pushes made with the default token do not start pull_request workflows. workflow_dispatch is exempt, so run CI
+      # for the branch explicitly; its checks attach to the pull request's head commit.
+      - name: Start CI for the pull request
+        if: ${{ steps.pr.outputs.pull-request-operation == 'created' || steps.pr.outputs.pull-request-operation == 'updated' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.pr.outputs.pull-request-branch }}
+        run: gh workflow run ci.yml --ref "$BRANCH"
 
-            Required before approval:
-            - Review upstream CEF/Chromium security notes and remaining version gap.
-            - Fetch and checksum-verify both archives; review SHA-256 additions if used.
-            - Rebuild the wrapper, bridge, and all helpers on both architectures.
-            - Run engine offline tests and the bundled sandbox smoke test.
-            - Manually verify certificates, profile isolation, private browsing, navigation,
-              popup blocking, downloads, scripts, find, snapshots, close, and upgrade rollback.
-            - Sign and notarize the complete app, retaining the Chromium sandbox.
-            See docs/UPDATING_CHROMIUM.md.
+  # One open issue says whenever the pin is behind Chrome stable or the check cannot run, and closes itself afterwards.
+  tracking-issue:
+    needs: check
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        continue-on-error: true
+        with:
+          name: chromium-status
+          path: chromium-status
+      - name: Open, refresh or close the tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: scripts/chromium-issue.sh chromium-status/status.json chromium-status/status.md
 
   security-gap:
     needs: check
