@@ -71,8 +71,11 @@ downloads.
 The implementation includes native Spaces, vertical tabs,
 favorites and pins, session restoration and archiving, command search, split
 browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
-explicit trust decision. Downloads are delegated to Cairn's URL-based downloader;
-website cookies are not forwarded, so downloads requiring a website sign-in may fail.
+explicit trust decision. Downloads started by a page are performed by Chromium
+itself, so the page's cookies, sign-in, POST body and `blob:` sources are kept; Cairn
+asks where to save, shows progress, and supports pause, resume and cancel. Only links
+pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
+website cookies.
 
 Automated tests cover the integrated services and legacy settings compatibility. The
 bundled arm64 Chromium engine has also passed native rendering checks for CSS

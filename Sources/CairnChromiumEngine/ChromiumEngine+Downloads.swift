@@ -7,6 +7,10 @@ import CairnChromiumBridge
 final class ChromiumDownloadBridge: NSObject, @preconcurrency CCChromiumDownloadDelegate {
     static let shared = ChromiumDownloadBridge()
     weak var delegate: EngineDownloadDelegate?
+    // The bridge only knows a tab's hashed profile directory; the app needs the Space's profile ID back.
+    private var profileIDs: [String: String] = [:]
+
+    func remember(profileID: String) { profileIDs[ChromiumEngine.profileDirectory(profileID)] = profileID }
 
     func chromiumDownloadWillStart(_ info: [String: Any], decide: @escaping (String?) -> Void) {
         let request = EngineDownloadRequest(
@@ -15,7 +19,7 @@ final class ChromiumDownloadBridge: NSObject, @preconcurrency CCChromiumDownload
             suggestedFilename: info["suggestedName"] as? String ?? "",
             mimeType: info["mime"] as? String ?? "",
             totalBytes: (info["totalBytes"] as? NSNumber)?.int64Value ?? -1,
-            profileID: info["profile"] as? String ?? "",
+            profileID: (info["profile"] as? String).flatMap { profileIDs[$0] } ?? "",
             isEphemeral: info["ephemeral"] as? Bool ?? false)
         guard let delegate else { decide(nil); return }
         delegate.engineWillStartDownload(request) { url in decide(url?.path) }

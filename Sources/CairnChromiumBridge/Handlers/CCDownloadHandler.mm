@@ -16,6 +16,8 @@ struct LiveDownload {
   bool lastPaused = false;
 };
 std::map<uint32_t, LiveDownload> live;
+// Chromium re-enters OnBeforeDownload when it auto-resumes an interrupted download; reuse the user's choice.
+std::map<uint32_t, std::string> chosen;
 
 NSDictionary *Update(CefRefPtr<CefDownloadItem> item) {
   return @{
@@ -46,6 +48,11 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
       [tab.delegate chromiumTab:tab download:String(item->GetURL()) filename:String(suggested)];
       return true;
     }
+    auto previous = chosen.find(item->GetId());
+    if (previous != chosen.end()) {
+      callback->Continue(previous->second, false);
+      return true;
+    }
     NSDictionary *info = @{
       @"id": @(item->GetId()),
       @"url": String(item->GetURL()),
@@ -55,11 +62,15 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
       @"profile": tab.profile ?: @"",
       @"ephemeral": @(tab.ephemeral),
     };
+    uint32_t identifier = item->GetId();
     __block CefRefPtr<CefBeforeDownloadCallback> pending = callback;
     [delegate chromiumDownloadWillStart:info decide:^(NSString *path) {
       if (!pending) return;
       // Releasing the callback without Continue cancels the download.
-      if (path.length) pending->Continue(CefString(path.UTF8String), false);
+      if (path.length) {
+        chosen[identifier] = path.UTF8String;
+        pending->Continue(CefString(path.UTF8String), false);
+      }
       pending = nullptr;
     }];
     return true; // Swift must always decide: an unanswered callback leaves the download pending.
@@ -71,6 +82,7 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
     uint32_t identifier = item->GetId();
     if (item->IsComplete() || item->IsCanceled() || item->IsInterrupted()) {
       live.erase(identifier);
+      chosen.erase(identifier);
     } else {
       LiveDownload& entry = live[identifier];
       entry.callback = callback;
@@ -89,7 +101,10 @@ class DownloadHandler final : public TabHandler, public CefDownloadHandler {
 };
 }
 
-void ReleaseDownloads() { live.clear(); }
+void ReleaseDownloads() {
+  live.clear();
+  chosen.clear();
+}
 
 CefRefPtr<CefDownloadHandler> MakeDownloadHandler(Client& client) { return new DownloadHandler(client); }
 

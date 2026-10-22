@@ -163,6 +163,7 @@ enum SmokeError: Error { case failed(String) }
             _ = try await js(first, "window.open('/popup'); true")
             try await Task.sleep(nanoseconds: 200_000_000)
             try require(popups == 0, "unsolicited popup is blocked")
+            try await checkDownloads()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
