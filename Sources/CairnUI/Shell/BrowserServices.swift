@@ -54,6 +54,7 @@ public final class BrowserServices {
     public private(set) var moduleTrustRevision = 0
     var moduleReview: ModuleScriptReview?
     @ObservationIgnored private let workspaceStore: WorkspaceStore
+    @ObservationIgnored var siteZoom: SiteZoomStore?
     @ObservationIgnored private var archiveTimer: Timer?
 
     public init(model: BrowserModel, settings: Settings? = nil,
@@ -152,6 +153,7 @@ public final class BrowserServices {
             self?.downloads.start(url: url, suggestedFilename: filename)
             self?.sheet = .downloads
         }
+        installPageTools()
         applySettings()
         autoArchive()
         if let selected = model.selectedTabID { model.select(selected) }
@@ -162,6 +164,7 @@ public final class BrowserServices {
 
     public func applySettings() {
         model.searchTemplate = settings.searchTemplate
+        applyPageSettings()
         autoArchive()
     }
 
@@ -184,6 +187,8 @@ public final class BrowserServices {
         model.onNavigationCommitted = nil
         model.downloadHandler = nil
         model.onError = nil
+        model.onTabHostChanged = nil
+        model.onTabZoomChanged = nil
         downloads.onError = nil
         modules.deactivate()
         Array(model.liveTabs.keys).forEach { model.unloadTab($0) }
@@ -299,7 +304,7 @@ public final class BrowserServices {
     }
 
     public func commands() -> [Command] {
-        let local: [Command] = [
+        var local: [Command] = [
             .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", shortcut: "⌘T", perform: { [weak self] _ in self?.newTab() }),
             .init(id: "ui.address", title: "Edit Address", symbol: "link", shortcut: "⌘L", perform: { [weak self] _ in self?.focusAddress() }),
             .init(id: "ui.split", title: "Toggle Split View", symbol: "rectangle.split.2x1", shortcut: "⇧⌘D", perform: { [weak self] _ in self?.toggleSplit() }),
@@ -310,6 +315,7 @@ public final class BrowserServices {
             .init(id: "ui.history", title: "History", symbol: "clock", perform: { [weak self] _ in self?.sheet = .history }),
             .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", shortcut: "⌘F", perform: { [weak self] _ in self?.findPresented = true }),
         ]
+        local += pageToolCommands()
         let localTitles = Set(local.map { $0.title.lowercased() })
         let moduleCommands = modules.allCommands(for: model).filter { !localTitles.contains($0.title.lowercased()) }
         return local + moduleCommands.map { command in

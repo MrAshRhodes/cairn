@@ -24,13 +24,17 @@ public enum ChromiumEngineModule {
 }
 
 @MainActor
-public final class ChromiumEngine: BrowserEngine {
+public final class ChromiumEngine: BrowserEngine, EnginePagePreferences {
     public let kind = EngineKind.chromium
     public let displayName = "Chromium (CEF, experimental)"
     public var versionDescription: String { CCChromiumRuntime.versionDescription() }
     public private(set) var initializationError: Error?
     public private(set) var lastDataRemovalError: String?
     private var tabs: [UUID: WeakTab] = [:]
+    /// Applied to existing tabs when changed and to each new tab before its first load.
+    public var pagePreferences = PagePreferences() {
+        didSet { for tab in tabs.values.compactMap(\.value) { tab.setPagePreferences(pagePreferences) } }
+    }
 
     public init(dataRoot: URL? = nil) {
         let support = dataRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -45,6 +49,7 @@ public final class ChromiumEngine: BrowserEngine {
     public func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab {
         let tab = ChromiumTab(configuration: configuration, error: initializationError)
         tabs[tab.id] = WeakTab(tab)
+        tab.setPagePreferences(pagePreferences)
         tabs = tabs.filter { $0.value.value != nil }
         if let initialURL { tab.load(initialURL) }
         return tab

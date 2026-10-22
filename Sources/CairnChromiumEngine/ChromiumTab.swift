@@ -25,7 +25,10 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     }
     var zoom: Double {
         get { bridge.zoom }
-        set { bridge.zoom = newValue }
+        set {
+            bridge.zoom = newValue
+            (delegate as? EngineTabZoomEvents)?.engineTab(self, zoomDidChange: bridge.zoom)
+        }
     }
 
     init(configuration: EngineConfiguration, error: Error?) {
@@ -46,7 +49,7 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     }
     func load(_ url: URL) {
         guard !closed, startupError == nil else { return }
-        guard ["https", "http", "about", "file"].contains(url.scheme?.lowercased() ?? "") else {
+        guard ["https", "http", "about", "file"].contains(url.scheme?.lowercased() ?? "") || ViewSource.isViewSource(url) else {
             report("Unsupported URL scheme"); return
         }
         state.url = url

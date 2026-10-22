@@ -74,6 +74,7 @@ using namespace cc;
     auto tab = weakSelf;
     if (error) { tab.state[@"error"] = error.localizedDescription; [tab publish]; return; }
     tab.pageEnabled = YES;
+    [tab applyEmulation];
     tab.scriptOperations--;
     [tab setScripts:tab.configuredScripts];
   }];
