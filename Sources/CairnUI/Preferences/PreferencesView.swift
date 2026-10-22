@@ -25,6 +25,7 @@ public struct PreferencesView: View {
                     general(services).tabItem { Label("General", systemImage: "slider.horizontal.3") }.tag("general")
                     privacy(services).tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
                     updates(services).tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }.tag("updates")
+                    LinksPane(services: services).tabItem { Label("Links", systemImage: "link") }.tag("links")
                     modules(services).tabItem { Label("Modules", systemImage: "puzzlepiece.extension") }.tag("modules")
                 }.padding(.horizontal, 18).padding(.bottom, 18)
             } else {

@@ -33,6 +33,7 @@ public final class BrowserServices {
     public let settings: Settings
     public let downloads: DownloadsManager
     public let boosts: BoostStore
+    public let linkRules: LinkRuleStore
     public let modules: ModuleRegistry
     public let updater: UpdateController
     public let directory: URL
@@ -65,6 +66,7 @@ public final class BrowserServices {
         modules = registry ?? ModuleRegistry()
         workspaceStore = WorkspaceStore(directory: directory)
         boosts = BoostStore(directory: directory.appendingPathComponent("Boosts", isDirectory: true))
+        linkRules = LinkRuleStore(url: directory.appendingPathComponent("link-rules.json"))
         downloads = DownloadsManager()
         updater = UpdateController()
     }
@@ -132,6 +134,7 @@ public final class BrowserServices {
             boostsWritable = false
             report("Boosts could not be loaded", detail: "\(error.localizedDescription)\nEditing is disabled to preserve your saved Boosts.")
         }
+        loadLinkRules()
         model.userScriptProvider = { [weak self] url in self?.boosts.scripts(for: url) ?? [] }
         modules.onError = { [weak self] error in self?.report("Module error", error: error) }
         BuiltinModules.all().forEach { modules.register($0) }

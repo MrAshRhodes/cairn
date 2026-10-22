@@ -48,7 +48,7 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
             self.window = window
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
-            pendingURLs.forEach { services.model.newTab(url: $0) }
+            pendingURLs.forEach { services.openExternalLink($0) }
             pendingURLs = []
         } catch {
             let alert = NSAlert()
@@ -62,7 +62,7 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func application(_ application: NSApplication, open urls: [URL]) {
         if let services {
-            urls.forEach { services.model.newTab(url: $0) }
+            urls.forEach { services.openExternalLink($0) }
             window?.makeKeyAndOrderFront(nil)
         } else { pendingURLs.append(contentsOf: urls) }
     }

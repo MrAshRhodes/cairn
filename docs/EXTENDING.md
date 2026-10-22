@@ -77,6 +77,13 @@ A local command can instead declare:
 
 These commands run only when invoked, on the selected HTTP(S) page, not automatically on navigation. Both the browser state and the executing document's protocol are checked. Grants are in memory only and are revoked when the module is reloaded, deactivated or removed, or the application restarts. Engine evaluation errors are delivered to `ModuleRegistry.onError`.
 
+## Extension points added with folders, import, and link rules
+
+- `TabRowAccessoryRegistry` lets a feature add a small badge to sidebar tab rows without editing `SidebarView`.
+- `CairnImport` is a separate target with a consent-gated source protocol; see `docs/features/import.md` and `docs/IMPORT_SCHEMA.md`.
+- Boosts accept optional `style` and `zapped` fields and `.cairnboost` files; see `docs/features/boosts.md`.
+- `LinkRuleStore`/`LinkRouter` route external links; see `docs/features/links.md`.
+
 ## Add per-site styles with Boosts
 
 `BoostStore(directory:)` owns a `boosts.json` file in its supplied local directory. The conventional app location is `~/Library/Application Support/Cairn/Boosts/`. A minimal document is:
