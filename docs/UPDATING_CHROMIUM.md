@@ -167,8 +167,10 @@ A browser whose creation is not confirmed within 20 s is abandoned and the tab r
 Lifecycle regressions can be run without launching Chromium:
 `scripts/swiftw test --filter 'TabPromptTests|SitePermissionStoreTests'` and
 `python3 -m unittest discover -s engine/tests -p test_lifecycle.py -v`.
-The latter includes source-contract guards plus a native pending-callback registry test
-(requires the already-prepared CEF headers/wrapper; it never fetches or initializes CEF).
+The latter includes source-contract guards, a native pending-callback registry test and
+real CEF DLL-wrapper identity checks (requires the already-prepared CEF headers/wrapper;
+it never fetches or initializes CEF). Browser callbacks carry fresh C++ wrapper objects:
+use `CefBrowser::IsSame`, never pointer equality, to associate them with a tab.
 Real multi-tab/popup/DevTools close, active-download quit and blocked-main-thread shutdown
 still require bundled-engine smoke/manual verification; these unit checks do not prove a
 profile flush or the native timeout path.

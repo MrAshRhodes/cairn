@@ -51,8 +51,22 @@ class LifecycleContractTests(unittest.TestCase):
         self.assertIn("pendingChoices.clear()", release)
         self.assertIn("callback->Cancel()", release)
 
+    def test_prompt_handlers_compare_browser_handles_not_wrapper_addresses(self):
+        for handler in ("CCRequestHandler.mm", "CCJSDialogHandler.mm", "CCPermissionHandler.mm"):
+            with self.subTest(handler=handler):
+                source = (BRIDGE / "Handlers" / handler).read_text()
+                self.assertNotRegex(source, r"cefBrowser\s*[!=]=\s*browser")
+                self.assertIn("SameBrowser(tab.cefBrowser, browser)", source)
+
     @unittest.skipUnless(platform.system() == "Darwin", "Objective-C registry test requires macOS")
     def test_pending_registry_cancels_and_dismisses_once_without_loading_cef(self):
+        self.run_native_fixture("pending_callbacks")
+
+    @unittest.skipUnless(platform.system() == "Darwin", "CEF wrapper test requires macOS")
+    def test_browser_identity_survives_distinct_cef_callback_wrappers(self):
+        self.run_native_fixture("browser_identity", link_wrapper=True)
+
+    def run_native_fixture(self, name, link_wrapper=False):
         architecture = "arm64" if platform.machine() == "arm64" else "x86_64"
         cef = ROOT / "engine/cef" / architecture
         wrapper = ROOT / "engine/.cache" / f"build-{architecture}"
@@ -63,20 +77,21 @@ class LifecycleContractTests(unittest.TestCase):
         work = ROOT / ".build" / f"lifecycle-test-{uuid.uuid4()}"
         work.mkdir(parents=True)
         try:
-            executable = work / "pending-callbacks"
+            executable = work / name
             environment = dict(os.environ, TMPDIR=str(work))
             subprocess.run(
                 ["xcrun", "clang++", "-std=c++20", "-fobjc-arc", "-fno-rtti",
                  "-Wno-incomplete-implementation", "-Wno-protocol",
                  "-DCEF_USE_SANDBOX", "-DCEF_API_VERSION=15400",
                  f"-I{cef}", f"-I{wrapper}", f"-I{BRIDGE / 'include'}",
-                 str(ROOT / "engine/tests/pending_callbacks.mm"),
+                 str(ROOT / "engine/tests" / f"{name}.mm"),
+                 *([str(wrapper / "libcef_dll_wrapper/libcef_dll_wrapper.a")] if link_wrapper else []),
                  "-framework", "AppKit", "-o", str(executable)],
                 check=True, cwd=ROOT, env=environment, capture_output=True, text=True,
             )
             subprocess.run([str(executable)], check=True, cwd=ROOT, env=environment, timeout=10)
         except subprocess.CalledProcessError as error:
-            self.fail(f"Native pending-callback regression failed:\n{error.stdout}\n{error.stderr}")
+            self.fail(f"Native {name} regression failed:\n{error.stdout}\n{error.stderr}")
         finally:
             shutil.rmtree(work)
 

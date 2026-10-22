@@ -101,7 +101,7 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
     id<CCChromiumTabPermissionDelegate> delegate = nil;
     if ([tab.delegate conformsToProtocol:@protocol(CCChromiumTabPermissionDelegate)])
       delegate = (id<CCChromiumTabPermissionDelegate>)tab.delegate;
-    if (!tab || tab.closing || stopping || tab.cefBrowser != browser || !delegate || !kinds) {
+    if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser) || !delegate || !kinds) {
       finish(@{@"allow": @NO}); return true;
     }
     Pending(tab)[requestID] = [finish copy];

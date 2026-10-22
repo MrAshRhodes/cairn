@@ -31,7 +31,7 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest>,
                       bool, bool) override {
     auto tab = owner;
-    if (!tab || tab.closing || stopping || tab.cefBrowser != browser) return true;
+    if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser)) return true;
     if (frame && frame->IsMain()) {
       ++navigationGeneration_;
       CancelPending(tab);
@@ -107,7 +107,7 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
                                  const CefString& error) override {
     ++navigationGeneration_;
     auto tab = owner;
-    if (!tab || tab.cefBrowser != browser) return;
+    if (!tab || !SameBrowser(tab.cefBrowser, browser)) return;
     CancelPending(tab);
     NSString *reason;
     switch (status) {

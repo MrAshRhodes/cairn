@@ -108,6 +108,10 @@ extern std::map<std::string, int> creating;
 
 NSString *String(const CefString& value);
 NSError *Failure(NSString *message);
+// CEF allocates a new C++ wrapper on each DLL callback; pointer equality is not browser identity.
+inline bool SameBrowser(const CefRefPtr<CefBrowser>& left, const CefRefPtr<CefBrowser>& right) {
+  return left && right && left->IsSame(right);
+}
 CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral);
 void FinishShutdown();
 NSString *ProfileRoot();

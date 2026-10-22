@@ -25,7 +25,7 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
                   const CefString& defaultText, CefRefPtr<CefJSDialogCallback> callback,
                   bool& suppress) override {
     auto tab = owner;
-    if (!tab || tab.closing || stopping || tab.cefBrowser != browser) { suppress = true; return false; }
+    if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser)) { suppress = true; return false; }
     NSString *suppressKey = SuppressKey(browser);
     auto pending = Pending(tab);
     for (NSString *key in [pending.allKeys copy]) {
@@ -39,7 +39,7 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
   bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser, const CefString& message, bool isReload,
                             CefRefPtr<CefJSDialogCallback> callback) override {
     auto tab = owner;
-    if (!tab || tab.closing || stopping || tab.cefBrowser != browser) {
+    if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser)) {
       callback->Continue(true, CefString()); return true;
     }
     return Forward(tab, @"beforeUnload", String(message), @"", @"", isReload, callback);
@@ -47,7 +47,7 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
 
   void OnResetDialogState(CefRefPtr<CefBrowser> browser) override {
     auto tab = owner;
-    if (!tab || tab.cefBrowser != browser) return;
+    if (!tab || !SameBrowser(tab.cefBrowser, browser)) return;
     auto pending = Pending(tab);
     for (NSString *key in [pending.allKeys copy]) {
       if (![key hasPrefix:@"js"]) continue;
