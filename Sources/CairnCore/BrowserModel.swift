@@ -169,11 +169,16 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func moveTab(_ id: UUID, to list: TabList, in spaceID: UUID? = nil, at index: Int? = nil) {
         guard let loc = locate(id), var moved = item(id) else { return }
+        if list == .favorites, loc.list != .favorites, workspace.favorites.count >= Workspace.maximumFavorites {
+            report(ServiceError.limit("Favorites hold at most \(Workspace.maximumFavorites) tabs. Remove one first."))
+            return
+        }
         let target = list == .favorites ? nil : (spaceIndex(spaceID) ?? loc.spaceIndex ?? selectedSpaceIndex)
         if list == .archive || target != loc.spaceIndex || (list == .favorites) != (loc.list == .favorites) {
             unloadTab(id)
         }
         remove(at: loc)
+        if list != .pinned || target != loc.spaceIndex || loc.list != .pinned { moved.folderID = nil }
         if list == .pinned || list == .favorites { moved.homeURL = moved.homeURL ?? moved.url } else { moved.homeURL = nil }
         insert(moved, list: list, spaceIndex: target, at: index)
         changed()
@@ -309,14 +314,14 @@ public final class BrowserModel: EngineTabDelegate {
     public func engineTabDidRequestClose(_ tab: EngineTab) { if let id = itemID(for: tab) { closeTab(id) } }
 
     // MARK: Internals
-    private func changed() { repairReferences(); onChange?() }
+    func changed() { repairReferences(); onChange?() }
 
-    private func report(_ error: Error) {
+    func report(_ error: Error) {
         errorMessage = error.localizedDescription
         onError?(error)
     }
 
-    private func isVisible(_ id: UUID, in space: Int) -> Bool {
+    func isVisible(_ id: UUID, in space: Int) -> Bool {
         workspace.favorites.contains { $0.id == id }
             || workspace.spaces[space].pinned.contains { $0.id == id }
             || workspace.spaces[space].tabs.contains { $0.id == id }
@@ -340,6 +345,7 @@ public final class BrowserModel: EngineTabDelegate {
             || !(selectedTabID.map { splitTabIDs.contains($0) } ?? false) {
             splitTabIDs = []
         }
+        for s in workspace.spaces.indices { repairFolders(in: s) }
         // A favorite is global metadata, not a global cookie jar. Recreate its live view on Space changes.
         for id in Array(liveTabs.keys) {
             guard let location = locate(id), location.list != .archive else { unloadTab(id); continue }
@@ -348,7 +354,7 @@ public final class BrowserModel: EngineTabDelegate {
         }
     }
 
-    private func update(_ id: UUID, _ body: (inout TabItem) -> Void) {
+    func update(_ id: UUID, _ body: (inout TabItem) -> Void) {
         guard let loc = locate(id) else { return }
         switch loc.list {
         case .favorites: body(&workspace.favorites[loc.index])
