@@ -8,18 +8,46 @@ import pathlib
 import platform
 import plistlib
 import shutil
+import struct
 import subprocess
 import threading
+import zlib
 import uuid
 
 from bundle import FRAMEWORK, HELPERS, bundle
 from tool import ROOT
 
 
+def _png(size=32):
+    def chunk(kind, data):
+        payload = kind + data
+        return struct.pack(">I", len(data)) + payload + struct.pack(">I", zlib.crc32(payload))
+    rows = b"".join(b"\x00" + b"\xc8\x32\x32\xff" * size for _ in range(size))
+    header = struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+
+
+ICON_PNG = _png()
+
+
 class Fixture(http.server.BaseHTTPRequestHandler):
+    icon_requests = []
+
     def do_GET(self):
         content_type = "text/html; charset=utf-8"
-        if self.path == "/probe.json":
+        extra_headers = {}
+        route = self.path.split("?")[0]
+        if route == "/icon.png":
+            Fixture.icon_requests.append({"cookie": self.headers.get("Cookie"), "referer": self.headers.get("Referer")})
+            body = ICON_PNG
+            content_type = "image/png"
+        elif route == "/icon-requests.json":
+            body = json.dumps(Fixture.icon_requests).encode()
+            content_type = "application/json"
+        elif route in ("/media.html", "/media-again.html"):
+            body = (ROOT / "engine/fixtures/media.html").read_bytes()
+            extra_headers["Set-Cookie"] = "fixture=1; Path=/"
+        elif route == "/probe.json":
             body = json.dumps({"userAgent": self.headers.get("User-Agent", "")}).encode()
             content_type = "application/json"
         else:
@@ -27,6 +55,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
+        for name, value in extra_headers.items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 

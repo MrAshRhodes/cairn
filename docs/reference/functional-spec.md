@@ -50,6 +50,18 @@ failed TLS must never be bypassed to make navigation work.
 Keyboard operation and accessibility labels are part of the interface, not
 optional alternatives to pointer input.
 
+Tabs show the site's own icon, fetched by Chromium through the Space's network
+stack. Icons are cached on disk per profile (never across profiles; a private
+store would keep them in memory only) and fall back to a globe. A tab playing
+sound shows a speaker in the sidebar that toggles mute; "Mute Tab", "Mute Other
+Tabs" and "Play or Pause Media" are commands. Mute survives navigation. The
+keyboard play/pause key controls the audible tab while it is playing by driving
+its first media element; custom players without one are out of reach.
+Picture-in-Picture: `requestPictureInPicture()` works inside Chromium's Alloy
+runtime (verified in the bundled smoke), so pages' own PiP controls function; an
+automatic mini player on leaving a tab and a floating-panel fallback are not
+built. Per-site zoom persistence is owned by the page-tools work.
+
 ## Local customization
 
 Swift modules contribute commands through an explicit registry. Declarative
