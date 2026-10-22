@@ -30,6 +30,11 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
     @ObservationIgnored public var onError: ((Error) -> Void)?
     public private(set) var errorMessage: String?
+    /// Process-level problems of live tabs (crash, hang, stalled navigation); drives the recovery banner.
+    public internal(set) var tabHealth: [UUID: EngineTabHealth] = [:]
+    @ObservationIgnored var recoveryPolicies: [UUID: RecoveryPolicy] = [:]
+    @ObservationIgnored var needsReload: Set<UUID> = []
+    @ObservationIgnored var recoveryClock: () -> Date = { Date() }
     @ObservationIgnored private var liveProfileIDs: [UUID: String] = [:]
     @ObservationIgnored private var liveSpaceIDs: [UUID: UUID] = [:]
 
@@ -96,6 +101,7 @@ public final class BrowserModel: EngineTabDelegate {
     public func unloadTab(_ id: UUID) {
         let tab = liveTabs[id]
         liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil
+        tabHealth[id] = nil; recoveryPolicies[id] = nil; needsReload.remove(id)
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
         tab?.delegate = nil
         tab?.close()
@@ -114,7 +120,8 @@ public final class BrowserModel: EngineTabDelegate {
         if url != nil, validURL == nil { report(ServiceError.navigation("Unsupported navigation URL.")) }
         let tab = TabItem(url: validURL)
         workspace.spaces[s].tabs.append(tab)
-        if activate { select(tab.id) } else { _ = liveTab(for: tab.id) }
+        // A background tab stays lazy: it has no view, so Chromium would never create a browser for it.
+        if activate { select(tab.id) }
         changed()
         return tab.id
     }
@@ -128,6 +135,7 @@ public final class BrowserModel: EngineTabDelegate {
         update(id) { $0.lastActiveAt = Date() }
         repairReferences()
         _ = liveTab(for: id)
+        reloadIfNeeded(id)
         if !splitTabIDs.contains(id) { splitTabIDs = [] }
         changed()
     }
@@ -136,7 +144,7 @@ public final class BrowserModel: EngineTabDelegate {
         guard let s = spaceIndex(id) else { return }
         workspace.selectedSpaceID = id
         repairReferences()
-        if let t = workspace.spaces[s].selectedTabID { _ = liveTab(for: t) }
+        if let t = workspace.spaces[s].selectedTabID { _ = liveTab(for: t); reloadIfNeeded(t) }
         splitTabIDs = []
         changed()
     }
@@ -272,7 +280,7 @@ public final class BrowserModel: EngineTabDelegate {
     }
 
     // MARK: EngineTabDelegate
-    private func itemID(for tab: EngineTab) -> UUID? { liveTabs.first { $0.value === tab }?.key }
+    func itemID(for tab: EngineTab) -> UUID? { liveTabs.first { $0.value === tab }?.key }
 
     public func engineTab(_ tab: EngineTab, didChange state: EngineTabState) {
         guard let id = itemID(for: tab) else { return }
@@ -282,6 +290,7 @@ public final class BrowserModel: EngineTabDelegate {
         tabStates[id] = state
         let before = item(id)
         update(id) {
+            if Self.isBootstrapBlank(state, over: $0) { return }
             if let url = state.url, URLResolver.isNavigable(url) { $0.url = url }
             if !state.title.isEmpty { $0.title = state.title }
         }
@@ -311,7 +320,7 @@ public final class BrowserModel: EngineTabDelegate {
     // MARK: Internals
     private func changed() { repairReferences(); onChange?() }
 
-    private func report(_ error: Error) {
+    func report(_ error: Error) {
         errorMessage = error.localizedDescription
         onError?(error)
     }

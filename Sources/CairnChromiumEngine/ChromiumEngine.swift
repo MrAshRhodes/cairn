@@ -36,8 +36,13 @@ public final class ChromiumEngine: BrowserEngine {
         let support = dataRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Cairn/Chromium")
         do {
-            try CCChromiumRuntime.start(withRoot: support.path)
+            try CCChromiumRuntime.start(withRoot: EngineStorageRoot.resolve(support).path)
         } catch {
+            if (error as NSError).domain == "org.cairn.Chromium.Startup",
+               case .alreadyRunning(let code) = EngineStartupOutcome(exitCode: (error as NSError).code) {
+                // Another Cairn owns this profile and has been told to show itself; nothing is left to do here.
+                exit(code)
+            }
             initializationError = error
         }
     }

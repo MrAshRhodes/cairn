@@ -50,7 +50,8 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
             report("Unsupported URL scheme"); return
         }
         state.url = url
-        state.isLoading = true
+        // Only a tab that is on screen gets a browser; a detached tab loads once it is attached, so it must not spin.
+        state.isLoading = bridge.view.window != nil
         state.progress = 0
         state.isSecure = false
         state.errorMessage = nil

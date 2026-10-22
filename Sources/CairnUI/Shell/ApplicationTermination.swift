@@ -9,9 +9,13 @@ final class ApplicationTerminationCoordinator {
     private enum State { case idle, checking, waiting, completed }
     private var state = State.idle
     private let prepare: CairnApp.TerminationPreparation?
+    private let deadline: Duration
 
-    init(prepare: CairnApp.TerminationPreparation? = nil) {
+    /// `deadline` bounds how long quitting may wait for `prepare`; the engine has its own, shorter limits,
+    /// so this is the last resort that keeps a stuck shutdown from trapping the user in a window-less app.
+    init(prepare: CairnApp.TerminationPreparation? = nil, deadline: Duration = .seconds(12)) {
         self.prepare = prepare
+        self.deadline = deadline
     }
 
     func request(approval: () -> Bool,
@@ -37,6 +41,12 @@ final class ApplicationTerminationCoordinator {
                 self.state = .completed
                 reply(true)
             }
+        }
+        Task { @MainActor in
+            try? await Task.sleep(for: deadline)
+            guard self.state == .waiting else { return }
+            self.state = .completed
+            reply(true)
         }
         return .terminateLater
     }

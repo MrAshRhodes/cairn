@@ -64,6 +64,13 @@ NS_ASSUME_NONNULL_BEGIN
 
 // [Focus]
 
+// [Health]
+// Process-level health: `kind` is one of healthy, unresponsive, crashed, navigationStalled, automationUnavailable.
+// `detail` is a user-facing reason or hint and `code` the Chromium termination/exit code (0 when not applicable).
+@protocol CCChromiumTabHealthDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab health:(NSString *)kind detail:(NSString *)detail code:(NSInteger)code;
+@end
+
 // [JSDialog]
 
 // [Keyboard]

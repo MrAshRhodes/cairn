@@ -10,12 +10,12 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
  public:
   explicit LifeSpanHandler(Client& client) : TabHandler(client), client_(client) {}
   void OnAfterCreated(CefRefPtr<CefBrowser> created) override {
-    pendingBrowsers--;
+    if (client_.creationPending) { client_.creationPending = false; pendingBrowsers--; }
     client_.browser = created;
     clients[created->GetIdentifier()] = &client_;
     client_.registration = created->GetHost()->AddDevToolsMessageObserver(client_.devToolsObserver());
     auto tab = owner;
-    if (!tab || tab.closing || stopping) created->GetHost()->CloseBrowser(true);
+    if (!tab || tab.closing || stopping || client_.abandoned) created->GetHost()->CloseBrowser(true);
     else [tab browserCreated];
   }
   bool DoClose(CefRefPtr<CefBrowser> b) override {
