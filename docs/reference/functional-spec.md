@@ -27,7 +27,7 @@ WebKit profiles. Publish separate Apple Silicon and Intel applications.
 | Pinned tabs | Persistent per-Space tabs with a saved home URL. Closing unloads the view without deleting the pin. |
 | Today tabs | Ordinary tabs, with selection and ordering persisted. Closing removes the tab. |
 | Archive | Inactive ordinary tabs move here after a configurable interval. Selected/split-visible tabs must not be archived while in use. Restoring moves a tab into the active list. |
-| Split view | Two distinct live tabs displayed together. Closing/moving/removing a participating tab must leave a valid layout. |
+| Split view | Two to four distinct live tabs in a resizable layout. Closing/moving/removing a participating tab must leave a valid layout. |
 
 Changing a Space must not silently navigate or mutate tabs in another Space.
 Popups inherit the originating tab's profile. Moving a tab between profiles
@@ -60,7 +60,8 @@ its first media element; custom players without one are out of reach.
 Picture-in-Picture: `requestPictureInPicture()` works inside Chromium's Alloy
 runtime (verified in the bundled smoke), so pages' own PiP controls function; an
 automatic mini player on leaving a tab and a floating-panel fallback are not
-built. Per-site zoom persistence is owned by the page-tools work.
+built. Per-site zoom persistence is described below.
+
 ### Page tools
 
 Commands (command bar; menus bind them): *Toggle Developer Tools* (⌥⌘I), *View
@@ -116,6 +117,28 @@ key and signed release artifacts. Missing signing configuration disables updates
 with an explanation; it must not enable unsigned update installation. Chromium
 updates require rebuilding and publishing an application bundle; installing a
 new Chrome app does not update embedded CEF.
+
+## Release-readiness boundaries
+
+The integrated implementation is still a developer preview. Passing the local
+arm64 engine smoke is necessary, but not sufficient, for a public Chromium release.
+Release engineering must also enforce the Chromium currency, signing and artifact
+checks in [the maintenance guide](../UPDATING_CHROMIUM.md) and
+[release guide](../RELEASING.md).
+
+| Area | Implemented boundary or remaining acceptance |
+| --- | --- |
+| Startup and recovery | Restored background tabs are lazy; startup, navigation and renderer failures surface recovery state. The bootstrap blank document must never report completion of the requested page. Long-duration browsing, sleep/wake and memory-pressure acceptance remain open. |
+| Popups | A user gesture and per-tab budget are required. Adopted browsers preserve the opener, messaging and request context, including intentionally blank documents. No per-site always-allow exception or requested window geometry; first-document Boost injection is not guaranteed. |
+| Permissions and dialogs | Secure-origin/default-deny policy, per-Space site decisions, JavaScript dialogs and HTTP authentication prompts are implemented. Real macOS camera/microphone approvals and site sign-in journeys still need interactive acceptance. Closing a tab forces closure rather than waiting for `beforeunload`; navigation/reload can prompt. |
+| Downloads | Native page downloads preserve cookies, POST and blob sources, with destination choice and pause/resume/cancel. Engine-download retry is not implemented; native save-panel interaction and downloaded-file handling require acceptance. |
+| Page tools | DevTools, PDF export/viewing, source, language/UA and site zoom are implemented. Native printing, PDF toolbar interaction and private-session zoom policy are not certified. |
+| Workspace and customization | Folders, themes, remappable shortcuts, four-pane splits, Chromium-family import, local Boost editing/sharing and link rules are implemented. Peek overlay, quick window, Safari/Firefox import, cloud sync and Arc account migration are not implemented. |
+| Compatibility and distribution | Intel runtime, complete keyboard/VoiceOver journeys, production signing/notarization and sustained website compatibility must be verified separately. Chrome extension and DRM support are not promised. |
+
+Do not represent these gaps as completed features or release certification. A
+release that cannot satisfy a safety gate must remain unpublished rather than
+silently disabling the gate.
 
 ## Reference evidence and limits
 

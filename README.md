@@ -82,11 +82,21 @@ asks where to save, shows progress, and supports pause, resume and cancel. Only 
 pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
 website cookies.
 
+Chromium integration also includes gesture-gated popups with opener/context
+preservation, site permission and JavaScript dialog prompts, HTTP authentication,
+fail-closed TLS handling, favicon and audio/mute state, DevTools, page source,
+PDF export/viewing, per-site zoom and language/user-agent preferences. Renderer
+crashes and stalled navigation have visible recovery states; startup and shutdown
+have bounded deadlines. These are implemented capabilities, not a claim of full
+Arc feature parity or production readiness.
+
 Automated tests cover the integrated services and legacy settings compatibility. The
 bundled arm64 Chromium engine has also passed native rendering checks for CSS
 grid, container queries, `:has()`, JavaScript modules, network requests, responsive
 viewport resizing, and compositor output, alongside profile isolation and lifecycle
-checks. These are local development checks, not release-security certification.
+checks. The combined engine smoke also exercises popup messaging, permission/dialog
+denials, authenticated/POST/blob downloads, crash recovery, media, PDF export and
+page tools. These are local development checks, not release-security certification.
 
 ![Actual Chromium rendering of Cairn's local responsive test page](site/assets/chromium-rendering.png)
 
@@ -95,6 +105,10 @@ Cairn shell or a claim that every website works.*
 
 Full interactive Chromium browsing acceptance, VoiceOver, Intel CEF runtime
 testing, Apple Developer ID signing and notarization remain **unverified**.
+Camera/microphone approvals, native print/save panels, real-world sign-in flows,
+long-running sessions and website compatibility still require hands-on acceptance.
+See the [release-readiness boundaries](docs/reference/functional-spec.md#release-readiness-boundaries)
+for the remaining feature and validation limits.
 Private update-signing material remains in the maintainer's local Keychain, not
 GitHub. The weekly release workflow is wired but cannot publish until CI signing
 is explicitly provisioned; see the [release guide](docs/RELEASING.md#weekly-release-automation).
