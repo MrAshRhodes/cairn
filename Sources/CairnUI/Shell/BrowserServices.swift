@@ -127,6 +127,9 @@ public final class BrowserServices {
         }
         do { history = try HistoryStore(url: directory.appendingPathComponent("history.sqlite")) }
         catch { report("History is unavailable", error: error) }
+        model.sitePermissions.onError = { [weak self] error in self?.report("Site permissions could not be saved", error: error) }
+        do { try model.sitePermissions.load(from: directory.appendingPathComponent("permissions.json")) }
+        catch { report("Site permissions could not be loaded", detail: "\(error.localizedDescription)\nThe original file is preserved. Choices will not be remembered this session.") }
         do { try boosts.load() }
         catch {
             boostsWritable = false

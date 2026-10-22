@@ -30,7 +30,10 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
     @ObservationIgnored public var onError: ((Error) -> Void)?
     public private(set) var errorMessage: String?
-    @ObservationIgnored private var liveProfileIDs: [UUID: String] = [:]
+    /// Prompts a page is waiting on and remembered site permissions; see BrowserModel+Permissions.swift.
+    public let prompts = TabPromptCenter()
+    public let sitePermissions = SitePermissionStore()
+    @ObservationIgnored var liveProfileIDs: [UUID: String] = [:]
     @ObservationIgnored private var liveSpaceIDs: [UUID: UUID] = [:]
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
@@ -95,6 +98,7 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func unloadTab(_ id: UUID) {
         let tab = liveTabs[id]
+        cancelPrompts(for: id)
         liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
         tab?.delegate = nil
@@ -280,6 +284,7 @@ public final class BrowserModel: EngineTabDelegate {
         state.title = String(state.title.prefix(TabItem.maximumTitleLength))
         let previous = tabStates[id]
         tabStates[id] = state
+        promptsTabStateChanged(id, previous: previous, state: state)
         let before = item(id)
         update(id) {
             if let url = state.url, URLResolver.isNavigable(url) { $0.url = url }
