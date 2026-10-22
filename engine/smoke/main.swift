@@ -178,6 +178,7 @@ enum SmokeError: Error { case failed(String) }
                         "external protocol is reported to the app, never launched by Chromium")
             try await runMedia()
             try await checkPopups()
+            try await checkPrompts()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)

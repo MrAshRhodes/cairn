@@ -39,6 +39,8 @@ class Application final : public CefApp, public CefBrowserProcessHandler {
     // or adopts it and the user can see what was blocked.
     if (process_type.empty()) command_line->AppendSwitch("disable-popup-blocking");
     if (useMockKeychain && process_type.empty()) command_line->AppendSwitch("use-mock-keychain");
+    // Lets CefRequestHandler::GetAuthCredentials see HTTP authentication instead of Chromium's own prompt.
+    if (process_type.empty()) command_line->AppendSwitch("disable-chrome-login-prompt");
   }
   void OnContextInitialized() override { ready = true; }
   void OnScheduleMessagePumpWork(int64_t delay) override {

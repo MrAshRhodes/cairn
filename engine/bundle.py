@@ -53,6 +53,10 @@ def bundle(app, arch, configuration, helper=None):
             "CFBundleShortVersionString": info.get("CFBundleShortVersionString", "0.1"),
             "LSUIElement": True, "LSMinimumSystemVersion": "14.0",
         }
+        # Capture runs in these helper processes; the prompt macOS shows names the main app.
+        for key in ("NSCameraUsageDescription", "NSMicrophoneUsageDescription"):
+            if key in info:
+                plist[key] = info[key]
         (contents / "Info.plist").write_bytes(plistlib.dumps(plist))
     resources = app / "Contents/Resources"
     resources.mkdir(parents=True, exist_ok=True)

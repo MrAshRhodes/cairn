@@ -95,6 +95,17 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 // [JSDialog]
+// `type` is alert, confirm, prompt or beforeUnload. A dismissal also covers navigation resetting the dialog.
+@protocol CCChromiumTabJSDialogDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab requestsJSDialog:(NSString *)requestID type:(NSString *)type
+            message:(NSString *)message defaultText:(NSString *)defaultText origin:(NSString *)origin
+           isReload:(BOOL)isReload;
+- (void)chromiumTab:(CCChromiumTab *)tab dismissesJSDialog:(NSString *)requestID;
+@end
+@interface CCChromiumTab (JSDialog)
+- (void)resolveJSDialog:(NSString *)requestID accept:(BOOL)accept text:(nullable NSString *)text
+        suppressFurther:(BOOL)suppressFurther;
+@end
 
 // [Keyboard]
 
@@ -120,10 +131,34 @@ typedef NS_ENUM(NSInteger, CCPopupDisposition) {
 // [Load]
 
 // [Permission]
+// `kinds` are SitePermissionKind raw values; requests for anything else are denied inside the bridge.
+@protocol CCChromiumTabPermissionDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab requestsPermission:(NSString *)requestID origin:(NSString *)origin
+           topLevel:(NSString *)topLevel kinds:(NSArray<NSString *> *)kinds;
+- (void)chromiumTab:(CCChromiumTab *)tab dismissesPermission:(NSString *)requestID;
+@end
+@interface CCChromiumTab (Permission)
+- (void)resolvePermission:(NSString *)requestID allow:(BOOL)allow;
+@end
 
 // [Print]
 
 // [Request]
+// Authentication and blocked-certificate reports. There is deliberately no way to continue past a TLS error.
+@protocol CCChromiumTabRequestDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab requestsAuthentication:(NSString *)requestID url:(NSString *)url
+               host:(NSString *)host port:(NSInteger)port realm:(NSString *)realm scheme:(NSString *)scheme
+            isProxy:(BOOL)isProxy;
+// validFrom/validUntil are seconds since 1970, or 0 when unknown.
+- (void)chromiumTab:(CCChromiumTab *)tab blockedCertificate:(NSString *)url code:(NSInteger)code
+            subject:(NSString *)subject issuer:(NSString *)issuer validFrom:(double)validFrom
+         validUntil:(double)validUntil;
+@end
+@interface CCChromiumTab (Request)
+// A nil username cancels the request.
+- (void)resolveAuthentication:(NSString *)requestID username:(nullable NSString *)username
+                     password:(nullable NSString *)password;
+@end
 
 // [ResourceRequest]
 // Content blocking: immutable rule snapshot swapped under a lock; lookups run on Chromium's IO thread.

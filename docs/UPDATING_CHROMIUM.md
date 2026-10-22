@@ -182,8 +182,16 @@ responsible for per-site guards. Snapshot/find require a mounted, ready browser.
 
 Explicit limitations, not silent claims of support:
 
-* Favicons are not yet fetched. There is no CEF permission/authentication UI,
-  extension/DRM integration, DevTools frontend, PDF export or native printing API.
+* Favicons are not yet fetched. There is no extension/DRM integration, DevTools
+  frontend, PDF export or native printing API.
+* Page prompts are client-implemented (`CCPermissionHandler.mm`, `CCJSDialogHandler.mm`,
+  `GetAuthCredentials`/`OnCertificateError` in `CCRequestHandler.mm`) and shown as cards on
+  the tab that raised them. Site permissions are denied unless allowed; decisions are
+  remembered per Space and origin in `permissions.json` and managed under Settings →
+  Permissions. HTTP auth needs `--disable-chrome-login-prompt` (set in `CCRuntime.mm`);
+  credentials are never stored. Certificate errors are always refused and explained, with no
+  proceed option. Not done: screen capture (denied), `beforeunload` on tab/app close (close
+  still forces), Chromium-side permission storage.
 * CEF's own downloads are cancelled and URLs are delegated to Cairn. Transferring
   authenticated CEF cookies to a separate downloader is not implemented.
 * Website data can be cleared per Space, per site and per kind (Preferences ▸ Privacy). CEF has no
@@ -270,9 +278,10 @@ For hardened signing:
 
 * **Renderer and GPU helpers:** `engine/entitlements/renderer.plist` (`allow-jit`).
 * **Generic, Alerts and Plugin helpers:** `engine/entitlements/helper.plist`
-  (empty dictionary).
-* **Main app:** the release integrator's minimal app entitlements; capabilities
-  such as camera/microphone require a separate permission/UI/privacy review.
+  (camera and microphone only: capture runs in these processes).
+* **Main app:** the release integrator's minimal app entitlements (camera,
+  microphone, location). They are reviewed: every site request goes through
+  `CCPermissionHandler.mm` and is denied unless the user allows it.
 * Libraries do not receive process JIT entitlements.
 
 Do not add `disable-library-validation`, `allow-unsigned-executable-memory`, or

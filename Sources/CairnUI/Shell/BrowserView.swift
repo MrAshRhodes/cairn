@@ -298,6 +298,7 @@ struct BrowserView: View {
             }
         }
         .background(.background)
+        .overlay { TabPromptOverlay(model: model, tabID: id) }
         .overlay(alignment: .bottomLeading) {
             if split && model.selectedTabID != id {
                 Button("Focus pane") { services.selectTab(id) }

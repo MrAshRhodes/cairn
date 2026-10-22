@@ -23,6 +23,7 @@ public struct PreferencesView: View {
                 TabView(selection: $selectedTab) {
                     general(services).tabItem { Label("General", systemImage: "slider.horizontal.3") }.tag("general")
                     privacy(services).tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
+                    SitePermissionsView(services: services).tabItem { Label("Permissions", systemImage: "checkmark.shield") }.tag("permissions")
                     updates(services).tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }.tag("updates")
                     LinksPane(services: services).tabItem { Label("Links", systemImage: "link") }.tag("links")
                     modules(services).tabItem { Label("Modules", systemImage: "puzzlepiece.extension") }.tag("modules")

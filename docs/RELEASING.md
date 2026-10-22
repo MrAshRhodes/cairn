@@ -120,8 +120,10 @@ Do not tell users to disable Gatekeeper globally. The script verifies nested cod
 signatures, architecture, Sparkle linkage, and the app-relative framework rpath.
 Sparkle symlinks and executable bits are preserved with `ditto`; nested Mach-O files,
 XPC services, helper apps, and frameworks are signed inside-out, not with `--deep`.
-The main app retains minimal camera/microphone usage entitlements; renderer and
-GPU helpers receive the CEF JIT entitlement. Library validation is not disabled.
+The main app retains minimal camera, microphone and location entitlements (a site only
+gets them after the user allows it in Cairn's own permission prompt); renderer and
+GPU helpers receive the CEF JIT entitlement, and the generic helper, where capture
+runs, receives the camera/microphone entitlements. Library validation is not disabled.
 Chromium handles web networking itself; the former WebKit-only transport-security
 exception is removed. Sparkle's update transport remains HTTPS-only.
 

@@ -42,6 +42,9 @@ public final class BrowserModel: EngineTabDelegate {
     public var blockedPopups: [UUID: Int] = [:]
     @ObservationIgnored var liveProfileIDs: [UUID: String] = [:]
     @ObservationIgnored var liveSpaceIDs: [UUID: UUID] = [:]
+    /// Prompts a page is waiting on and remembered site permissions; see BrowserModel+Permissions.swift.
+    public let prompts = TabPromptCenter()
+    public let sitePermissions = SitePermissionStore()
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine
@@ -105,6 +108,7 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func unloadTab(_ id: UUID) {
         let tab = liveTabs[id]
+        cancelPrompts(for: id)
         liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil; blockedPopups[id] = nil
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
         tab?.delegate = nil
@@ -289,6 +293,7 @@ public final class BrowserModel: EngineTabDelegate {
         state.title = String(state.title.prefix(TabItem.maximumTitleLength))
         let previous = tabStates[id]
         tabStates[id] = state
+        promptsTabStateChanged(id, previous: previous, state: state)
         let before = item(id)
         update(id) {
             if let url = state.url, URLResolver.isNavigable(url) { $0.url = url }
