@@ -1,6 +1,7 @@
 SWIFTW := scripts/swiftw
 
 .PHONY: build test run app cef dmg clean
+.DEFAULT_GOAL := build
 
 # Chromium (CEF) is the only engine, and every Swift build links it. Preparing it is
 # idempotent: the pinned archive is verified (downloaded once) and the wrapper is rebuilt

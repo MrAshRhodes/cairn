@@ -11,6 +11,7 @@
       Once appcast.xml exists, write RELEASE-INFO.json, RELEASE-NOTES.txt and SHA256SUMS.
 """
 import argparse
+import datetime
 import functools
 import hashlib
 import importlib.util
@@ -23,6 +24,7 @@ import sys
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
+GATE_MAX_AGE = datetime.timedelta(hours=24)
 ARCHITECTURES = ("arm64", "x86_64")
 SIGNING = {"ad-hoc": "ad-hoc", "developer-id": "Developer ID"}
 NUMERIC = re.compile(r"[0-9]+(?:\.[0-9]+){0,2}")
@@ -197,6 +199,10 @@ def load_gate_record(path, engine):
         raise ValueError(f"Chromium gate record {path}: {error}") from error
     if record["engine"] != {"cef": engine["cef"], "chromium": engine["chromium"]}:
         raise ValueError("the built Chromium does not match the Chromium the release gate assessed")
+    checked = datetime.datetime.strptime(record["checked_at"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+    age = datetime.datetime.now(datetime.timezone.utc) - checked
+    if age > GATE_MAX_AGE or age < -datetime.timedelta(minutes=5):
+        raise ValueError("the Chromium gate record is stale; rerun the release so the gate is re-evaluated")
     return record
 
 

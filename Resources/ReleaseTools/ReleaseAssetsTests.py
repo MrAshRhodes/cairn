@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Offline tests for per-architecture release records and the finalized file set; nothing is signed or uploaded."""
 import contextlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import hashlib
 import importlib.util
 import io
@@ -33,7 +33,7 @@ CEF = "154.0.34+g14c5a08+chromium-154.0.8037.98"
 CHROMIUM = "154.0.8037.98"
 OTHER_CEF = "154.0.35+g0123abc+chromium-154.0.8037.100"
 OTHER_CHROMIUM = "154.0.8037.100"
-NOW = datetime(2026, 7, 1, 12, 30, 5, tzinfo=timezone.utc)
+NOW = datetime.now(timezone.utc).replace(microsecond=0)
 ACKNOWLEDGEMENT = "Reviewed Chrome 156 security fixes; none reachable in Cairn. Re-pin next week."
 OTHER_COMMIT = "0123456789abcdef0123456789abcdef01234567"
 FINAL = {"appcast.xml", "RELEASE-INFO.json", "RELEASE-NOTES.txt", "SHA256SUMS"}
@@ -389,6 +389,8 @@ class ReleaseAssetsTests(unittest.TestCase):
             "acknowledgement on a current pin": dict(acknowledgement=ACKNOWLEDGEMENT),
             "schema": dict(schema=2),
             "forged timestamp": dict(checked_at="yesterday"),
+            "expired assessment": dict(checked_at=(NOW - timedelta(hours=25)).strftime("%Y-%m-%dT%H:%M:%SZ")),
+            "future assessment": dict(checked_at=(NOW + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%SZ")),
         }.items():
             forged = self.work / "chromium-gate/forged.json"
             forged.write_text(json.dumps(dict(record, **changes)))

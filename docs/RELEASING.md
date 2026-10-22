@@ -69,7 +69,8 @@ a maintainer must supply a reviewed, written rationale in the manual
 `chromium_risk_acknowledgement` input (20–500 printable characters, one line).
 The rationale is recorded with the gate result and release metadata; it cannot
 override unavailable or invalid upstream metadata. Scheduled and tag-triggered
-runs have no acknowledgement and remain blocked by a gap.
+runs have no acknowledgement and remain blocked by a gap. Finalization rejects a
+gate record older than 24 hours, so an approval that waits longer requires a new run.
 Disable `dry_run` only for an intended authenticated release. Pushing an
 explicit stable `vMAJOR.MINOR.PATCH` tag also runs the same pipeline; the tag must
 identify the checked-out commit and be newer than the current release.

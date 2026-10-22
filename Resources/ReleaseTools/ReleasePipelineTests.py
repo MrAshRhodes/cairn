@@ -85,7 +85,7 @@ class ReleasePipelineTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             status = gate.main(["--output", str(cls.gate)], {"GITHUB_ACTOR": "maintainer"},
                                lambda arguments: (0, json.dumps(report), ""),
-                               datetime(2026, 7, 1, 12, 30, 5, tzinfo=timezone.utc))
+                               datetime.now(timezone.utc))
         assert status == 0
 
     @classmethod
