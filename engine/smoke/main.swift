@@ -122,6 +122,8 @@ enum SmokeError: Error { case failed(String) }
             print("CAIRN_SMOKE_READY")
             try require(recordedURLs[first.id, default: []].allSatisfy { $0 != nil && $0?.absoluteString != "about:blank" },
                         "bootstrap about:blank never reaches the tab state and the address is never empty after load()")
+            try require(try await js(first, "location.href") as? String == first.state.url?.absoluteString,
+                        "reported navigation completion belongs to the requested document, not bootstrap about:blank")
             let scriptState = try await js(first, "[window.__cairnStart, window.__cairnEnd, document.readyState]")
             print("SCRIPT STATE: \(String(describing: scriptState))")
             try require(try await js(first, "window.__cairnStart && window.__cairnEnd") as? Bool == true,

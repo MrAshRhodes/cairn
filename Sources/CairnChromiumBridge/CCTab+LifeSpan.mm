@@ -4,7 +4,11 @@
 
 @implementation CCChromiumTab (LifeSpan)
 - (instancetype)initAdoptingPopupFromTab:(CCChromiumTab *)opener {
-  if ((self = [self initWithProfile:opener.profile ephemeral:opener.ephemeral])) [self adoptClient];
+  if ((self = [self initWithProfile:opener.profile ephemeral:opener.ephemeral])) {
+    // An opener may intentionally create and populate about:blank; it is not our startup placeholder.
+    self.bootstrapDocument = NO;
+    [self adoptClient];
+  }
   return self;
 }
 @end

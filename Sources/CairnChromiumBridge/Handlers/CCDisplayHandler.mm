@@ -11,7 +11,9 @@ class DisplayHandler final : public TabHandler, public CefDisplayHandler {
  public:
   explicit DisplayHandler(Client& client) : TabHandler(client) {}
   void OnLoadingProgressChange(CefRefPtr<CefBrowser>, double progress) override {
-    auto tab = owner; tab.state[@"progress"] = @(progress); [tab publish];
+    auto tab = owner;
+    if (tab.bootstrapDocument) return;
+    tab.state[@"progress"] = @(progress); [tab publish];
   }
   void OnTitleChange(CefRefPtr<CefBrowser>, const CefString& title) override {
     auto tab = owner;

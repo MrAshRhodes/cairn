@@ -169,6 +169,8 @@ NSTimeInterval NavigationWatchdogSeconds() {
   self.pendingURL = url;
   // The address bar shows the requested URL until the navigation commits.
   self.state[@"url"] = url;
+  self.state[@"isLoading"] = @(self.view.window != nil);
+  self.state[@"progress"] = @0;
   if ([url isEqualToString:@"about:blank"]) self.bootstrapDocument = NO;
   // A renderer crash needs no boot: the DevTools session (Page.enable, user scripts) survives it, and Page.enable
   // cannot be re-sent until a navigation has revived the renderer.
