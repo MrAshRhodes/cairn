@@ -14,6 +14,7 @@ import ssl
 import subprocess
 import threading
 import zlib
+import time
 import uuid
 
 from bundle import FRAMEWORK, HELPERS, bundle
@@ -32,10 +33,80 @@ def _png(size=32):
 ICON_PNG = _png()
 
 
+DOWNLOAD_PAGE = b"""<!doctype html><title>Downloads</title>
+<a id="secret" href="/dl/secret.bin">secret</a>
+<a id="slow" href="/dl/slow.bin">slow</a>
+<a id="truncated" href="/dl/truncated.bin">truncated</a>
+<form method="post" action="/dl/post"><input name="posted" value="cairn"><button id="post">post</button></form>
+<button id="blob" onclick="const a=document.createElement('a');a.href=window.URL.createObjectURL(new Blob(['blob-bytes'],{type:'application/octet-stream'}));a.download='blob.txt';document.body.appendChild(a);a.click();a.remove()">blob</button>
+"""
+SECRET = b"S" * 200_000
+
+
 class Fixture(http.server.BaseHTTPRequestHandler):
     icon_requests = []
 
+    def attachment(self, name, length, status=200):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Disposition", f'attachment; filename="{name}"')
+        self.send_header("Content-Length", str(length))
+        self.end_headers()
+
+    def do_download(self, method):
+        cookie = self.headers.get("Cookie", "")
+        if self.path == "/dl/login" or self.path == "/dl/anon":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            if self.path == "/dl/login":
+                self.send_header("Set-Cookie", "cairn_dl=ok; Path=/; HttpOnly")
+            self.send_header("Content-Length", str(len(DOWNLOAD_PAGE)))
+            self.end_headers()
+            self.wfile.write(DOWNLOAD_PAGE)
+        elif self.path == "/dl/secret.bin" and "cairn_dl=ok" in cookie:
+            self.attachment("secret.bin", len(SECRET))
+            self.wfile.write(SECRET)
+        elif self.path == "/dl/secret.bin":
+            body = b"forbidden"
+            self.send_response(403)
+            self.send_header("Content-Type", "text/plain")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        elif self.path == "/dl/post" and method == "POST":
+            body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+            self.attachment("post.txt", len(body))
+            self.wfile.write(body)
+        elif self.path == "/dl/slow.bin":
+            self.attachment("slow.bin", 400_000)
+            try:
+                for _ in range(40):
+                    self.wfile.write(b"x" * 10_000)
+                    self.wfile.flush()
+                    time.sleep(0.15)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+        elif self.path == "/dl/truncated.bin":
+            self.attachment("truncated.bin", 100_000)
+            self.wfile.write(b"t" * 10_000)
+            self.wfile.flush()
+            self.close_connection = True
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        try:
+            self.do_download("POST")
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+
     def do_GET(self):
+        if self.path.startswith("/dl/"):
+            try:
+                self.do_download("GET")
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         content_type = "text/html; charset=utf-8"
         extra_headers = {}
         route = self.path.split("?")[0]
@@ -168,10 +239,10 @@ def main():
         with (work / "stdout.log").open("w") as stdout, (work / "stderr.log").open("w") as stderr:
             try:
                 run = subprocess.run([str(app / "Contents/MacOS/Cairn")], env=env, cwd=ROOT,
-                                     stdout=stdout, stderr=stderr, timeout=90)
+                                     stdout=stdout, stderr=stderr, timeout=150)
                 status = run.returncode
             except subprocess.TimeoutExpired:
-                print("CEF process exceeded 90 seconds; terminated.", flush=True)
+                print("CEF process exceeded 150 seconds; terminated.", flush=True)
         output = (work / "stdout.log").read_text()
         errors = (work / "stderr.log").read_text()
         print(output)

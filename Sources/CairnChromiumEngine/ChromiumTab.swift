@@ -32,6 +32,7 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
 
     init(configuration: EngineConfiguration, error: Error?) {
         profileID = configuration.profileID
+        ChromiumDownloadBridge.shared.remember(profileID: configuration.profileID)
         startupError = error
         bridge = CCChromiumTab(profile: ChromiumEngine.profileDirectory(configuration.profileID),
                                ephemeral: configuration.isEphemeral)

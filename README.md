@@ -76,8 +76,11 @@ Boosts with an explicit trust decision. Newer pieces: sidebar folders and Space 
 importer for Chromium-family browsers ([docs](docs/features/import.md)), a visual Boost
 editor with Zap and `.cairnboost` sharing ([docs](docs/features/boosts.md)), and link
 routing rules ([docs](docs/features/links.md); Peek overlay and quick window are not built
-yet). Downloads are delegated to Cairn's URL-based downloader;
-website cookies are not forwarded, so downloads requiring a website sign-in may fail.
+yet). Downloads started by a page are performed by Chromium
+itself, so the page's cookies, sign-in, POST body and `blob:` sources are kept; Cairn
+asks where to save, shows progress, and supports pause, resume and cancel. Only links
+pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
+website cookies.
 
 Automated tests cover the integrated services and legacy settings compatibility. The
 bundled arm64 Chromium engine has also passed native rendering checks for CSS

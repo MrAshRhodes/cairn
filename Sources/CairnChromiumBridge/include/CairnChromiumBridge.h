@@ -80,6 +80,21 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 // [Download]
+// Downloads outlive tabs, so they are reported to a process-wide delegate instead of a tab delegate.
+// info: id, url, suggestedName, mime, totalBytes, profile, ephemeral.
+// update: id, complete, canceled, interrupted, paused, reason, received, total, percent, speed, path.
+@protocol CCChromiumDownloadDelegate <NSObject>
+- (void)chromiumDownloadWillStart:(NSDictionary<NSString *, id> *)info
+                           decide:(void (^)(NSString *_Nullable path))decide;
+- (void)chromiumDownloadUpdated:(NSDictionary<NSString *, id> *)update;
+@end
+
+@interface CCChromiumDownloads : NSObject
+@property(class, nonatomic, weak, nullable) id<CCChromiumDownloadDelegate> delegate;
++ (void)cancel:(uint32_t)identifier;
++ (void)pause:(uint32_t)identifier;
++ (void)resume:(uint32_t)identifier;
+@end
 
 // [Drag]
 

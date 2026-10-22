@@ -179,6 +179,7 @@ enum SmokeError: Error { case failed(String) }
             try await runMedia()
             try await checkPopups()
             try await checkPrompts()
+            try await checkDownloads()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)

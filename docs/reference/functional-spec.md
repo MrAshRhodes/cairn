@@ -76,8 +76,11 @@ secure extension sandbox. Do not automatically fetch or install remote Boosts.
 ## Downloads, privacy and updates
 
 Downloads require a destination chosen by the user, safe filename handling and
-visible cancellation/failure. Authenticated downloads should use the engine's
-own session, not silently restart a request without its credentials.
+visible cancellation/failure. Downloads started by a page are performed by the
+engine itself (so cookies, authentication, POST and `blob:`/`data:` sources keep
+working) and appear in the Downloads sheet with progress, pause, resume and cancel;
+a user cancellation is never reported as a failure. Only links pasted into the sheet
+use Cairn's cookie-less URL downloader. Completed files keep a quarantine attribute.
 
 History and site data have explicit deletion controls (per Space, per site, per data kind); removing a Space
 deletes its profile. A local, user-imported blocklist can block third-party requests, with per-site exemptions.

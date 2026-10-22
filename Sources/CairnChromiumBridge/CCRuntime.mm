@@ -99,6 +99,7 @@ void FinishShutdown() {
   [pumpTimer invalidate];
   pumpTimer = nil;
   contexts.clear();
+  ReleaseDownloads();
   CefShutdown();
   library.reset();
   terminated = true; // CEF may only be initialized once per process.

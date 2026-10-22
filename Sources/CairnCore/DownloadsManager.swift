@@ -1,9 +1,15 @@
 import AppKit
 import Observation
 import Darwin
+import CoreServices
+import CairnEngineKit
 
 public struct DownloadItem: Identifiable, Sendable {
-    public enum Status: String, Sendable { case downloading, completed, cancelled, failed }
+    public enum Status: String, Sendable {
+        case downloading, paused, completed, cancelled, failed
+        /// Still transferring (or resumable): cannot be cleared and has live controls.
+        public var isActive: Bool { self == .downloading || self == .paused }
+    }
     public var id: UUID
     public var url: URL
     public var filename: String
@@ -11,20 +17,35 @@ public struct DownloadItem: Identifiable, Sendable {
     public var status: Status
     public var destination: URL?
     public var errorMessage: String?
+    /// Set for downloads performed by the engine (with the page's cookies and sign-in). Per-launch id.
+    public var engineID: UInt32?
+    public var receivedBytes: Int64
+    /// -1 when unknown.
+    public var totalBytes: Int64
+    public var bytesPerSecond: Int64
     public init(id: UUID = UUID(), url: URL, filename: String, progress: Double = 0,
-                status: Status = .downloading, destination: URL? = nil, errorMessage: String? = nil) {
+                status: Status = .downloading, destination: URL? = nil, errorMessage: String? = nil,
+                engineID: UInt32? = nil, receivedBytes: Int64 = 0, totalBytes: Int64 = -1, bytesPerSecond: Int64 = 0) {
         self.id = id; self.url = url; self.filename = filename; self.progress = progress
         self.status = status; self.destination = destination; self.errorMessage = errorMessage
+        self.engineID = engineID; self.receivedBytes = receivedBytes; self.totalBytes = totalBytes
+        self.bytesPerSecond = bytesPerSecond
     }
 }
 
 /// Downloads are explicitly user-directed and never opened automatically.
-/// URL-only downloads use an isolated session; engine-authenticated downloads need an engine-specific handoff.
+/// Pasted links use an isolated URL session. Downloads started by a page are performed by the engine itself
+/// (see `DownloadsManager+Engine.swift`), so they keep the page's cookies, sign-in, POST body or blob source.
 @MainActor @Observable
 public final class DownloadsManager {
-    public private(set) var items: [DownloadItem] = []
+    public internal(set) var items: [DownloadItem] = []
     @ObservationIgnored public var onError: ((Error) -> Void)?
     @ObservationIgnored private var transfers: [UUID: DownloadTransfer] = [:]
+    @ObservationIgnored var engineItemIDs: [UInt32: UUID] = [:]
+    /// Sends pause/resume/cancel to the engine; set by the app. Without it engine downloads cannot be controlled.
+    @ObservationIgnored public var engineControl: ((EngineDownloadAction, UInt32) -> Void)?
+    /// Asks the user for a destination; replaceable so tests do not show a panel.
+    @ObservationIgnored public var destinationChooser: (_ suggestedFilename: String, _ completion: @escaping @MainActor (URL?) -> Void) -> Void = DownloadsManager.presentSavePanel
     @ObservationIgnored private let configuration: URLSessionConfiguration
 
     public convenience init() { self.init(configuration: .ephemeral) }
@@ -47,14 +68,21 @@ public final class DownloadsManager {
             reportFailure(url: url, filename: Self.safeFilename(suggestedFilename), error: ServiceError.invalidDownload("Only HTTP(S) URLs are supported."))
             return
         }
+        destinationChooser(Self.safeFilename(suggestedFilename ?? url.lastPathComponent)) { [weak self] destination in
+            guard let self, let destination else { return }
+            do { try self.start(url: url, destination: destination) }
+            catch { self.reportFailure(url: url, filename: destination.lastPathComponent, error: error) }
+        }
+    }
+
+    static func presentSavePanel(_ suggestedFilename: String, completion: @escaping @MainActor (URL?) -> Void) {
         let panel = NSSavePanel()
         panel.title = "Save Download"
         panel.canCreateDirectories = true
-        panel.nameFieldStringValue = Self.safeFilename(suggestedFilename ?? url.lastPathComponent)
-        panel.begin { [weak self] response in
-            guard let self, response == .OK, let destination = panel.url else { return }
-            do { try self.start(url: url, destination: destination) }
-            catch { self.reportFailure(url: url, filename: destination.lastPathComponent, error: error) }
+        panel.nameFieldStringValue = suggestedFilename
+        panel.begin { response in
+            let url = response == .OK ? panel.url : nil
+            Task { @MainActor in completion(url) }
         }
     }
 
@@ -77,6 +105,7 @@ public final class DownloadsManager {
     }
 
     public func cancel(_ id: UUID) {
+        if let engineID = items.first(where: { $0.id == id })?.engineID { cancelEngineDownload(id, engineID: engineID); return }
         guard let transfer = transfers[id], transfer.cancel(),
               let index = items.firstIndex(where: { $0.id == id }) else { return }
         items[index].status = .cancelled
@@ -88,7 +117,7 @@ public final class DownloadsManager {
         NSWorkspace.shared.activateFileViewerSelecting([destination])
     }
 
-    public func clearFinished() { items.removeAll { $0.status != .downloading } }
+    public func clearFinished() { items.removeAll { !$0.status.isActive } }
 
     /// Server suggestions are labels only, never paths.
     public static func safeFilename(_ suggested: String?) -> String {
@@ -126,7 +155,7 @@ public final class DownloadsManager {
         }
     }
 
-    private func reportFailure(url: URL, filename: String, error: Error) {
+    func reportFailure(url: URL, filename: String, error: Error) {
         items.append(DownloadItem(url: url, filename: filename, status: .failed, errorMessage: error.localizedDescription))
         onError?(error)
     }

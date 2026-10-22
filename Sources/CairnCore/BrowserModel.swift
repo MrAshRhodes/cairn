@@ -33,6 +33,9 @@ public final class BrowserModel: EngineTabDelegate {
     /// Returns the user scripts (Boosts, modules) to inject for a URL. Set by the app at launch.
     @ObservationIgnored public var userScriptProvider: ((URL?) -> [EngineUserScript])?
     @ObservationIgnored public var downloadHandler: ((URL, String?) -> Void)?
+    /// Engine-performed downloads (see `BrowserModel+Downloads.swift`).
+    @ObservationIgnored public var engineDownloadHandler: ((EngineDownloadRequest, @escaping @MainActor (URL?) -> Void) -> Void)?
+    @ObservationIgnored public var engineDownloadUpdateHandler: ((EngineDownloadUpdate) -> Void)?
     /// Fired after every mutation of `workspace`; persistence subscribes here.
     @ObservationIgnored public var onChange: (() -> Void)?
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
@@ -50,6 +53,7 @@ public final class BrowserModel: EngineTabDelegate {
         self.engine = engine
         self.workspace = workspace.spaces.isEmpty ? .makeDefault() : workspace
         repairReferences()
+        (engine as? EngineDownloadControlling)?.downloadDelegate = self
     }
 
     // MARK: Lookup

@@ -195,6 +195,15 @@ public final class BrowserServices {
         }
         loadContentBlocking()
         removeOrphanProfiles()
+        model.engineDownloadHandler = { [weak self] request, decide in
+            guard let self else { decide(nil); return }
+            self.downloads.beginEngineDownload(request) { url in
+                decide(url)
+                if url != nil { self.sheet = .downloads }
+            }
+        }
+        model.engineDownloadUpdateHandler = { [weak self] update in self?.downloads.applyEngineUpdate(update) }
+        downloads.engineControl = { [weak model] action, id in model?.performEngineDownloadAction(action, id: id) }
         applySettings()
         autoArchive()
         if let selected = model.selectedTabID { model.select(selected) }
@@ -227,6 +236,9 @@ public final class BrowserServices {
         model.onChange = nil
         model.onNavigationCommitted = nil
         model.downloadHandler = nil
+        model.engineDownloadHandler = nil
+        model.engineDownloadUpdateHandler = nil
+        downloads.engineControl = nil
         model.onError = nil
         downloads.onError = nil
         modules.deactivate()

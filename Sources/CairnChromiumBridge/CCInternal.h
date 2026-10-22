@@ -94,6 +94,8 @@ NSString *ProfileRoot();
 void ApplyPendingProfileWork(NSString *root);
 void LoadTrackedOrigins(NSString *profile);
 void TrackOrigin(const std::string& contextKey, const CefString& url);
+// Drops live download callbacks; defined in Handlers/CCDownloadHandler.mm, called before CefShutdown.
+void ReleaseDownloads();
 
 // One per browser. CEF sees a plain CefClient that hands out one small handler object per family.
 // Handlers are created in CCClient.mm and implemented in Handlers/. The public members are the
