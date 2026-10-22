@@ -14,8 +14,11 @@ public struct TabLocation: Equatable, Sendable {
 @MainActor @Observable
 public final class BrowserModel: EngineTabDelegate {
     public var workspace: Workspace
-    /// 0 or 2 tab ids shown side by side (split view).
-    public var splitTabIDs: [UUID] = []
+    /// Persistent split groups (see BrowserModel+Split.swift). Only the group holding the selected tab is shown.
+    public internal(set) var splitGroups: [SplitGroup] = []
+    public internal(set) var closedTabs = ClosedTabsStack()
+    @ObservationIgnored public internal(set) var recentTabs = RecentTabsTracker()
+    @ObservationIgnored public var onSplitsChange: (() -> Void)?
     public var tabStates: [UUID: EngineTabState] = [:]
     public var favicons: [UUID: NSImage] = [:]
     /// Audible/muted state of live tabs; see BrowserModel+Media.swift.
@@ -132,7 +135,7 @@ public final class BrowserModel: EngineTabDelegate {
         update(id) { $0.lastActiveAt = Date() }
         repairReferences()
         _ = liveTab(for: id)
-        if !splitTabIDs.contains(id) { splitTabIDs = [] }
+        recentTabs.touch(id)
         changed()
     }
 
@@ -141,7 +144,6 @@ public final class BrowserModel: EngineTabDelegate {
         workspace.selectedSpaceID = id
         repairReferences()
         if let t = workspace.spaces[s].selectedTabID { _ = liveTab(for: t) }
-        splitTabIDs = []
         changed()
     }
 
@@ -150,7 +152,7 @@ public final class BrowserModel: EngineTabDelegate {
         guard let loc = locate(id) else { return }
         if loc.list == .pinned || loc.list == .favorites {
             unloadTab(id)
-            if splitTabIDs.contains(id) { splitTabIDs = [] }
+            detachFromSplit(id)
             for s in workspace.spaces.indices where workspace.spaces[s].selectedTabID == id {
                 workspace.spaces[s].selectedTabID = nextSelectable(in: s, excluding: id)
             }
@@ -163,9 +165,9 @@ public final class BrowserModel: EngineTabDelegate {
     public func removeTab(_ id: UUID) {
         guard let loc = locate(id) else { return }
         unloadTab(id)
-        splitTabIDs.removeAll { $0 == id }
-        if splitTabIDs.count < 2 { splitTabIDs = [] }
-        remove(at: loc)
+        let removed = remove(at: loc)
+        recordClosed(removed, at: loc)
+        recentTabs.forget(id)
         repairReferences()
         if let next = selectedTabID { _ = liveTab(for: next) }
         changed()
@@ -203,7 +205,7 @@ public final class BrowserModel: EngineTabDelegate {
         guard interval.isFinite, interval > 0 else { return }
         for s in workspace.spaces.indices {
             let stale = workspace.spaces[s].tabs.filter {
-                $0.id != workspace.spaces[s].selectedTabID && !splitTabIDs.contains($0.id)
+                $0.id != workspace.spaces[s].selectedTabID && splitGroup(containing: $0.id) == nil
                     && now.timeIntervalSince($0.lastActiveAt) > interval
             }
             for t in stale { unloadTab(t.id); moveTab(t.id, to: .archive, in: workspace.spaces[s].id) }
@@ -234,15 +236,6 @@ public final class BrowserModel: EngineTabDelegate {
         changed()
     }
 
-    // MARK: Split view
-    public func splitSelected(with other: UUID) {
-        guard let current = selectedTabID, current != other, isVisible(current, in: selectedSpaceIndex),
-              isVisible(other, in: selectedSpaceIndex) else { return }
-        _ = liveTab(for: other)
-        splitTabIDs = [current, other]
-    }
-    public func closeSplit() { splitTabIDs = [] }
-
     // MARK: Spaces
     @discardableResult
     public func addSpace(name: String, icon: String = "circle.grid.2x2", colorHex: String = "#7C5CFF") -> UUID {
@@ -269,7 +262,6 @@ public final class BrowserModel: EngineTabDelegate {
         workspace.spaces.remove(at: s)
         if workspace.selectedSpaceID == id {
             workspace.selectedSpaceID = workspace.spaces[0].id
-            splitTabIDs = []
         }
         repairReferences()
         changed()
@@ -318,14 +310,14 @@ public final class BrowserModel: EngineTabDelegate {
     public func engineTabDidRequestClose(_ tab: EngineTab) { if let id = itemID(for: tab) { closeTab(id) } }
 
     // MARK: Internals
-    private func changed() { repairReferences(); onChange?() }
+    func changed() { repairReferences(); onChange?() }
 
-    private func report(_ error: Error) {
+    func report(_ error: Error) {
         errorMessage = error.localizedDescription
         onError?(error)
     }
 
-    private func isVisible(_ id: UUID, in space: Int) -> Bool {
+    func isVisible(_ id: UUID, in space: Int) -> Bool {
         workspace.favorites.contains { $0.id == id }
             || workspace.spaces[space].pinned.contains { $0.id == id }
             || workspace.spaces[space].tabs.contains { $0.id == id }
@@ -337,18 +329,14 @@ public final class BrowserModel: EngineTabDelegate {
             ?? workspace.favorites.first(where: { $0.id != id })?.id
     }
 
-    private func repairReferences() {
+    func repairReferences() {
         if spaceIndex(workspace.selectedSpaceID) == nil { workspace.selectedSpaceID = workspace.spaces.first?.id }
         for s in workspace.spaces.indices {
             if let selected = workspace.spaces[s].selectedTabID, !isVisible(selected, in: s) {
                 workspace.spaces[s].selectedTabID = nextSelectable(in: s, excluding: selected)
             }
         }
-        if splitTabIDs.count != 2 || Set(splitTabIDs).count != 2
-            || !splitTabIDs.allSatisfy({ isVisible($0, in: selectedSpaceIndex) })
-            || !(selectedTabID.map { splitTabIDs.contains($0) } ?? false) {
-            splitTabIDs = []
-        }
+        repairSplits()
         // A favorite is global metadata, not a global cookie jar. Recreate its live view on Space changes.
         for id in Array(liveTabs.keys) {
             guard let location = locate(id), location.list != .archive else { unloadTab(id); continue }
@@ -368,7 +356,7 @@ public final class BrowserModel: EngineTabDelegate {
     }
 
     @discardableResult
-    private func remove(at loc: TabLocation) -> TabItem {
+    func remove(at loc: TabLocation) -> TabItem {
         switch loc.list {
         case .favorites: return workspace.favorites.remove(at: loc.index)
         case .pinned: return workspace.spaces[loc.spaceIndex!].pinned.remove(at: loc.index)
@@ -377,7 +365,7 @@ public final class BrowserModel: EngineTabDelegate {
         }
     }
 
-    private func insert(_ item: TabItem, list: TabList, spaceIndex s: Int?, at index: Int?) {
+    func insert(_ item: TabItem, list: TabList, spaceIndex s: Int?, at index: Int?) {
         func put(_ array: inout [TabItem]) { array.insert(item, at: min(max(index ?? array.count, 0), array.count)) }
         switch list {
         case .favorites: put(&workspace.favorites)
