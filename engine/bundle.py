@@ -51,7 +51,7 @@ def bundle(app, arch, configuration, helper=None):
             "CFBundleIdentifier": info["CFBundleIdentifier"] + ".helper" + identifier,
             "CFBundleVersion": info.get("CFBundleVersion", "1"),
             "CFBundleShortVersionString": info.get("CFBundleShortVersionString", "0.1"),
-            "LSUIElement": True, "LSMinimumSystemVersion": "14.0",
+            "LSUIElement": True, "LSMinimumSystemVersion": info.get("LSMinimumSystemVersion", "14.0"),
         }
         (contents / "Info.plist").write_bytes(plistlib.dumps(plist))
     resources = app / "Contents/Resources"
