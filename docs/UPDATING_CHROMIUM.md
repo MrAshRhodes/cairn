@@ -15,16 +15,18 @@ Downloaded binaries and build caches stay in ignored `engine/cef/` and
 
 ## Security status and release gate
 
-Verified against the upstream feeds on **2026-10-21**:
+Verified against the upstream feeds on **2026-10-22** (`python3 engine/tool.py check`):
 
 | Feed | Version |
 | --- | --- |
-| Latest common macOS **stable CEF** | `154.0.34+g14c5a08+chromium-154.0.8037.98` |
-| Chromium inside that CEF | `154.0.8037.98` |
+| Pinned CEF (`engine/cef.lock.json`) | `154.0.34+g14c5a08+chromium-154.0.8037.98` |
+| Newest **stable CEF** published for both macOS architectures | `156.0.7+g47dbc1d+chromium-156.0.8078.17` |
 | Chrome stable for macOS | `156.0.8078.48` |
 
 **There is a SECURITY GAP. Do not label this pin “current Chrome”, “up to date” or
-security-equivalent to Chrome stable.** CEF beta is not automatically promoted to
+security-equivalent to Chrome stable.** The pin trails by two major versions, and even the
+newest stable CEF trails Chrome stable by a few patch releases, so adopting it
+([routine bump](#routine-security-bump)) narrows the gap but does not close it. CEF beta is not automatically promoted to
 work around a stable-channel gap. Comparing versions is an alert, not a complete
 CVE or backport audit: older branches may contain backports and equal version
 numbers do not independently prove safety. Consult
@@ -38,7 +40,15 @@ until a maintainer has documented the outstanding security risk and validation.
 python3 engine/tool.py check
 # Nonzero on a gap (also nonzero on unavailable/invalid metadata; never assumes current):
 python3 engine/tool.py check --fail-on-gap
+# Also write the JSON and Markdown results; they are written when the check fails, too (status "failed"):
+python3 engine/tool.py check --report status.json --markdown status.md
 ```
+
+`tool.py` exits **0** after a successful check (also while a gap exists, unless `--fail-on-gap`
+asks otherwise), **2** for a gap under `--fail-on-gap`, and **1** when it could not decide: a
+network failure after four attempts, an upstream index or feed whose format changed, or an
+invalid lock. Fix a failing check instead of silencing it: while it fails, nobody is watching
+for Chromium security releases.
 
 The Release workflow runs the same fail-closed check before building either
 architecture, including during dry runs. Scheduled and tag-triggered releases
@@ -49,18 +59,36 @@ Unavailable or invalid upstream metadata cannot be overridden. Local
 finalization requires the equivalent gate record; see
 [the release guide](RELEASING.md#check-the-engine-and-authenticate-both-builds).
 
-The scheduled `engine-bump.yml` workflow checks daily and on manual dispatch. It
-compares the locked Chromium version **and** the latest stable CEF against Chrome
-stable, even when no newer CEF archive is available. A remaining gap produces a
-red attention job. A newer common stable CEF creates/updates a **draft** maintenance
-PR, never auto-merges. Only the proposing job has `contents: write` and
-`pull-requests: write`; checks are read-only. Action versions are immutable commit
-pins. There are no signing secrets in this workflow.
+The scheduled `engine-bump.yml` workflow (“Chromium maintenance”) runs daily at 07:23 UTC and on
+manual dispatch. It runs the offline updater tests, then compares the locked Chromium version
+**and** the newest stable CEF with Chrome stable, even when no newer CEF archive is available,
+and writes the result to the run summary and the `chromium-status` artifact:
 
-Enable “Allow GitHub Actions to create and approve pull requests” in repository
-settings for PR creation. `GITHUB_TOKEN`-created PRs may not automatically trigger
-other workflows: maintainers must explicitly run the required validation before
-approval. A failed feed request must be investigated rather than dismissed.
+* A remaining gap makes the `security-gap` job fail (red), so it cannot be missed.
+* `tracking-issue` keeps **one** open issue labelled `chromium-security` while the status is
+  `security_gap` or `failed` (including when the check itself cannot run), refreshes it on every
+  run and closes it once the pin no longer trails Chrome stable (`scripts/chromium-issue.sh`).
+* A newer stable CEF that **both** architectures publish makes `propose` pin it (`tool.py update`),
+  record the SHA-256 of both archives (`tool.py hash`), run the offline tests against the new pin
+  and create or refresh a **draft** pull request on `maintenance/cef-stable` with the review
+  checklist (`.github/chromium-bump-pr.md`). It then dispatches `ci.yml` for that branch. Nothing
+  is ever merged or released automatically.
+* The pin only ever moves to a build both architectures publish. When one architecture lags, the
+  report shows the newest build of each, an `ARCHITECTURE GAP` warning appears, and the pin can only
+  move to the newest build both publish: never ship one architecture on a newer Chromium than the other.
+
+The workflow is `contents: read`; `propose` adds `contents: write`, `pull-requests: write` and
+`actions: write` (to dispatch CI), and `tracking-issue` adds `issues: write`. Action versions are
+immutable commit pins and there are no signing secrets.
+
+Enable “Allow GitHub Actions to create and approve pull requests” in the repository settings, or
+`propose` cannot open the pull request. Pushes made with `GITHUB_TOKEN` do not start
+`pull_request` workflows, which is why `propose` dispatches CI itself (`workflow_dispatch` is
+exempt); if those runs are missing, start them with
+`gh workflow run ci.yml --ref maintenance/cef-stable`. GitHub disables scheduled workflows in a
+public repository after 60 days without repository activity: re-enable them in the Actions tab and
+treat a missing daily run as an alarm. A failed feed request (`status: failed`) must be
+investigated rather than dismissed.
 
 ## Explicit dependency preparation
 
@@ -93,8 +121,14 @@ The fetcher checks size and checksum before extracting, including cached archive
 rejects path/link escapes; and prints the downloaded archive's SHA-256. Spotify's
 index currently publishes SHA-1, not a signed SHA-256 manifest. Consequently this
 is reproducibility/integrity pinning over HTTPS, **not independent publisher
-authentication**. A reviewed `sha256` field can additionally be recorded per
-artifact and will be verified. Do not invent stronger provenance guarantees.
+authentication**. A `sha256` field per artifact is verified as well: `python3 engine/tool.py hash`
+records it for both archives from a download that already matched the published size and SHA-1, and
+the maintenance workflow does this for every proposed pin. The currently committed pin predates that
+and has none yet, so run `hash` once (or take the next bump). The hash comes from the same download:
+it detects a later substitution of the archive or a damaged cache, not a malicious first download.
+Do not invent stronger provenance guarantees. Network access retries four times with growing pauses;
+a download goes through a partial file that replaces the cached archive only after the size and
+checksums match, and a complete archive with the wrong checksum is never retried.
 
 Updating the lock invalidates the extracted pin marker and wrapper build marker.
 The build command removes its old wrapper build directory when the pin changes.
@@ -109,7 +143,9 @@ build also set `CAIRN_CEF_ARCH=x86_64` and pass the matching SwiftPM `--arch x86
 (or target triple). Do not mix arm64 helper binaries with x86_64 CEF. Bundling
 rejects mismatches and universal main/helper binaries. Publish separate,
 same-version arm64 and x86_64 apps; a universal CEF packaging pipeline is not
-implemented.
+implemented. `make app ARCH=x86_64` runs the whole cross build. CI builds and tests the Intel app
+natively on `macos-15-intel`; what is verified for Intel and the plan for that runner's retirement
+are in [the release guide](RELEASING.md#building-and-testing-the-intel-app).
 
 ## Application integration and lifecycle
 
@@ -331,10 +367,15 @@ For hardened signing:
 * **Renderer and GPU helpers:** `engine/entitlements/renderer.plist` (`allow-jit`).
 * **Generic, Alerts and Plugin helpers:** `engine/entitlements/helper.plist`
   (camera and microphone only: capture runs in these processes).
-* **Main app:** the release integrator's minimal app entitlements (camera,
-  microphone, location). They are reviewed: every site request goes through
-  `CCPermissionHandler.mm` and is denied unless the user allows it.
+* **Main app:** `Resources/Cairn.entitlements`: camera, microphone, location and Bluetooth. They are
+  reviewed: every site request goes through `CCPermissionHandler.mm` and is denied unless the user
+  allows it. The Bluetooth entitlement mirrors Chromium's own app entitlements and is dormant (Cairn has
+  no Web Bluetooth chooser); [RELEASING.md](RELEASING.md#local-development-no-apple-account) says how to
+  remove it.
 * Libraries do not receive process JIT entitlements.
+* `scripts/verify-bundle.sh` fails a build whose processes carry any other entitlement, lack a required
+  one, or carry `get-task-allow`, `disable-library-validation` or the other forbidden keys
+  ([packaging gate](RELEASING.md#packaging-gate)).
 
 Do not add `disable-library-validation`, `allow-unsigned-executable-memory`, or
 debugging entitlements to hide failures. Use the same real team identity for all
@@ -368,22 +409,110 @@ On the Swift side `CairnChromiumEngine` has `ChromiumEngine.swift` (engine, prof
 compiles every source file below a target, so adding a file needs no manifest edit. After a
 CEF update, a compile error points at the one handler file that uses the changed API.
 
+## Routine security bump
+
+Chrome ships security fixes every week and CEF publishes a stable build some days behind them, so
+keeping the pin current is routine maintenance, not a project. These are **targets, not guarantees**:
+they depend on CEF publishing in time and on a maintainer being available.
+
+* **Look** at a newer stable CEF within **24 hours** of the maintenance run that reports it.
+* **Validate and ship** it within **72 hours** of CEF publishing it for both architectures, or say on the
+  tracking issue why that is not possible.
+
+The automation ends at a draft pull request. Merging, releasing and accepting any remaining risk are
+always a maintainer's decisions.
+
+1. **Triage.** The daily maintenance run keeps the `chromium-security` tracking issue current while the pin
+   trails Chrome stable, and opens or refreshes a draft pull request on `maintenance/cef-stable` whenever
+   **both** architectures publish a newer stable CEF. Read the run summary (or the `chromium-status`
+   artifact) for the pin, the newest CEF of each architecture and Chrome stable, then the Chrome and CEF
+   release notes for every version between the old and the new pin.
+   A vulnerability exploited in the wild shortens the targets to hours. Inside one Chromium major version a
+   bump is usually mechanical; a major jump is where API drift appears.
+2. **Review the pull request.** Only `engine/cef.lock.json` may change, with both architectures on one
+   version and each archive's size, SHA-1 and SHA-256. Work through the checklist in the pull request
+   (`.github/chromium-bump-pr.md`). CI must be green on **both** architectures: the offline updater tests,
+   `make cef`, the native lifecycle tests, `scripts/swiftw test`, the bundled smoke test and the
+   [packaging gate](RELEASING.md#packaging-gate). A smoke run that needed its single retry says so in the run
+   summary; read the `smoke-logs-*` artifact before accepting it. If CI did not start, dispatch it as
+   [described above](#security-status-and-release-gate).
+3. **Fix API drift.** If the bridge stops compiling, the error points at one handler file
+   ([source layout](#source-layout)). Fix it on the pull request's branch or in a linked pull request, never
+   by loosening the build. Keep CEF API `15400` unless the build or a feature you need requires another one.
+   A scratch trial of the 156.0.7 build on 2026-10-22 compiled and passed every native and Swift test and the
+   packaging gate with no source change ([recorded validation](#updating-and-verification)).
+4. **Check by hand what CI cannot:** certificates, profile isolation, private browsing, navigation, popup
+   blocking, downloads, scripts, find, snapshots, close and quit, and an upgrade from the previous release
+   with rollback. Do it on both architectures, or record which one was not run.
+5. **Merge, then dry-run the release.** Run **Release → Run workflow** with `dry_run` enabled. It runs CI and
+   the Chromium gate, which passes only when the pin is **not behind Chrome stable**. Even the newest CEF may
+   trail it (on 2026-10-22: `156.0.8078.17` against Chrome `156.0.8078.48`), so a bump can narrow the gap
+   without closing it. A maintainer then either waits for the next CEF build or accepts the remaining gap in
+   a reviewed, written `chromium_risk_acknowledgement` (one line, 20–500 characters, recorded in the gate
+   result and the release metadata). Unavailable or invalid upstream metadata cannot be overridden, and a gate
+   record older than 24 hours is rejected, so repeat the run if the approval waits.
+6. **Release and confirm.** Run the release for real (`dry_run` off, once signing is provisioned) or finalize
+   locally; see [the release guide](RELEASING.md#check-the-engine-and-authenticate-both-builds).
+   `scripts/release.sh` runs the packaging gate on the ZIP and the DMG of each architecture. Afterwards read
+   the `engine` field of the published `RELEASE-INFO.json` (finalization derives it from the lock inside each
+   archived app and refuses a release whose two architectures disagree), confirm it names the version you
+   merged, and install one downloaded app to see the Chromium version it reports. The tracking issue closes
+   itself at the first maintenance run that finds no gap.
+
+### Architecture skew
+
+The pin only moves to a build **both** architectures publish. While one lags, `check` prints an
+`ARCHITECTURE GAP` warning and the report lists the newest build of each architecture. The pin can then only
+move to the newest build both publish (`propose` still opens a pull request for it when it is newer than the
+pin), never to the build only one architecture has. Do not edit the lock by hand to put one architecture on
+a newer Chromium: the feed needs same-version archives for both. Wait for the other architecture and
+re-check. If a fix for an actively exploited vulnerability is at stake, record the decision on the tracking
+issue instead of improvising a one-architecture release.
+
+### When the check itself fails
+
+A `failed` status (a network failure after four attempts, an upstream feed whose format changed, an invalid
+lock) keeps the tracking issue open and the run red, and means nobody is watching for Chromium security
+releases. Read `status.md` in the `chromium-status` artifact. Re-run for a transient network error; for a
+changed feed, fix `engine/tool.py` and add the new shape as a fixture in `engine/tests`. Never silence the
+check or let it assume the pin is current.
+
+### Rollback
+
+Sparkle never installs an older version, so a rollback ships as a **new, higher** version:
+
+1. `git revert` the commit that changed `engine/cef.lock.json`; it restores a previously tested pin for both
+   architectures.
+2. Rebuild and verify both architectures from the reverted lock (`make app` per architecture, which runs the
+   packaging gate, and the bundled smoke test), then release it as the next version through the normal
+   workflow. Never reissue a published version or tag with different bytes.
+3. The Chromium gate blocks it, because the older pin trails Chrome stable by more. Security review must
+   explicitly approve returning to a vulnerable version, and the `chromium_risk_acknowledgement` names the
+   reason and the validation.
+4. Back up profiles before every upgrade, and test the rollback with a copy of a profile the newer Chromium has
+   used: a schema change may make the older Chromium misbehave on it. Say so in the release notes.
+
 ## Updating and verification
 
 ```sh
 python3 -m unittest discover -s engine/tests -v
 python3 engine/tool.py update      # explicit; only latest COMMON STABLE version
+python3 engine/tool.py hash        # records the SHA-256 of both archives (downloads each once)
 git diff -- engine/cef.lock.json   # manually review both archive pins
 python3 engine/tool.py fetch
 python3 engine/tool.py build
+python3 -m unittest discover -s engine/tests -p 'test_lifecycle.py' -v   # native fixtures need the prepared CEF
 scripts/swiftw build
 scripts/swiftw test
+scripts/bundle-app.sh              # ends with scripts/verify-bundle.sh, the packaging gate
 
 # GUI session required. The smoke fixture serves only loopback, using isolated
 # profiles under engine/.cache; it does not touch normal Cairn profiles.
 python3 engine/smoke.py --identity 'Developer ID Application: YOUR IDENTITY'
 # Explicitly weaker local signing, for functional debugging ONLY:
 python3 engine/smoke.py --development-ad-hoc
+# The same ad-hoc run the way CI does it: one retry for the documented teardown flake, logs kept in $SMOKE_LOG_DIR:
+scripts/run-smoke.sh
 
 ```
 
@@ -409,6 +538,8 @@ with `Teardown watchdog expired`. Profiles are created under the symlink-resolve
 `cache_path is invalid` in the profile root's `cef.log`). Rarely (1 of about 25 recorded
 arm64 runs) Chromium's teardown watchdog still terminates the process with exit status 2
 after `CAIRN_CEF_SMOKE_OK` was printed; that run is reported as failed, so rerun it.
+`scripts/run-smoke.sh` reruns exactly that case once, never silently, and keeps the logs
+([CI smoke retries](CI.md#smoke-retries)).
 
 Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
 
@@ -425,6 +556,22 @@ Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
   termination regression tests and a full Chromium build, without relaunching the
   GUI. Repeat interactive cancel/approve/quit testing in release validation.
 
+Recorded validation on 2026-10-22, macOS 26.6 arm64 / CLT Swift 6.4. This is pipeline work, not release
+evidence:
+
+* **Intel app, cross-built on Apple Silicon** (the committed CEF 154 pin): `tool.py fetch` and `build --arch
+  x86_64`, `ARCH=x86_64 scripts/bundle-app.sh` and `scripts/make-dmg.sh`. `scripts/verify-bundle.sh --arch
+  x86_64` passed for the app, the ZIP and the DMG, and `--arch arm64` rejected the same app. Under Rosetta 2 the
+  bundled smoke test passed all 23 assertions through a throwaway wrapper (`engine/smoke.py` has no
+  architecture option, and Chromium logs that Rosetta is "neither tested nor maintained"). That is a sanity
+  check, **not** validation on Intel hardware.
+* **Trial bump in a scratch copy** to the newest stable CEF, `156.0.7+g47dbc1d+chromium-156.0.8078.17`:
+  `tool.py update` and `hash` against the live indexes, the 48 engine tests, `fetch`, the wrapper build,
+  `scripts/swiftw build` with **no source change** (API `15400` still compiles), the 6 native lifecycle tests,
+  all 329 Swift tests and `ARCH=arm64 scripts/bundle-app.sh` ending in the packaging gate all passed. Not run:
+  the GUI smoke test and the x86_64 build on 156, and the manual checks, so the bump is feasible but not
+  approved. The committed lock still pins 154.
+
 Before approving an update: review relevant security fixes and CEF API changes;
 fetch/check both architectures; build the version-matched wrapper and helper;
 run these tests on both hardware architectures; test bad certificates, popup
@@ -437,3 +584,4 @@ Rollback means restoring a previously tested complete app/lock and rebuilding
 matching artifacts, not blindly downgrading Chromium over a newer profile.
 Back up profiles before upgrades; schema changes may make downgrades unsafe.
 Security review must explicitly approve any rollback to a vulnerable version.
+[Rollback](#rollback) in the routine bump procedure has the steps.
