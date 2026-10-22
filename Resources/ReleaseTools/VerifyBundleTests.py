@@ -258,6 +258,51 @@ class VerifyBundleTests(unittest.TestCase):
         self.assertRejected(self.assemble(), "a Developer ID build is required", "--require-developer-id")
         self.assertRejected(self.assemble(), "--notarized needs a Developer ID build", "--notarized")
 
+    def package(self, app, kind, name, extra=None, applications_link=True):
+        """The app as users receive it: a zip made the way scripts/release.sh makes it, or a disk image like make-dmg.sh's."""
+        output = self.work / f"{name}.{kind}"
+        if kind == "zip":
+            result = run("ditto", "-c", "-k", "--sequesterRsrc", "--keepParent", app, output)
+        else:
+            stage = self.work / f"stage-{name}"
+            stage.mkdir()
+            self.assertEqual(run("ditto", app, stage / "Cairn.app").returncode, 0)
+            if applications_link:
+                os.symlink("/Applications", stage / "Applications")
+            if extra:
+                (stage / extra).write_text("not part of the product\n")
+            result = run("hdiutil", "create", "-ov", "-format", "UDZO", "-fs", "HFS+", "-volname", "Cairn",
+                         "-srcfolder", stage, output)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return output
+
+    def test_the_shipped_zip_and_disk_image_are_unpacked_and_verified(self):
+        app = self.assemble()
+        before = {path.name for path in (ROOT / ".build").glob("verify-bundle.*")}
+        for kind in ("zip", "dmg"):
+            result = self.verify(self.package(app, kind, f"ok-{kind}"), "--arch", "arm64")
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(f"ok-{kind}.{kind}: Cairn.app (arm64, ad-hoc)", result.stdout)
+        self.assertEqual({path.name for path in (ROOT / ".build").glob("verify-bundle.*")}, before, "scratch left behind")
+        self.assertNotIn("verify-bundle.", run("mount").stdout, "a disk image is still mounted")
+
+    def test_problems_inside_a_container_are_reported_against_the_container(self):
+        broken = self.package(self.assemble(skip=("Cairn Helper (GPU)",)), "zip", "broken")
+        result = self.assertRejected(broken, "missing helper executable Cairn Helper (GPU)")
+        self.assertIn("problem(s) in " + str(broken), result.stderr)
+        empty = self.work / "no-app"
+        (empty / "Something.app").mkdir(parents=True)
+        archive = self.work / "no-app.zip"
+        self.assertEqual(run("ditto", "-c", "-k", "--keepParent", empty, archive).returncode, 0)
+        self.assertRejected(archive, "does not contain Cairn.app")
+
+    def test_a_disk_image_must_hold_only_the_app_and_the_applications_link(self):
+        app = self.assemble()
+        self.assertRejected(self.package(app, "dmg", "extra", extra="README-first.txt"),
+                            "unexpected item in the disk image: README-first.txt")
+        self.assertRejected(self.package(app, "dmg", "nolink", applications_link=False),
+                            "Applications entry must be a symlink to /Applications")
+
 
 if __name__ == "__main__":
     unittest.main()

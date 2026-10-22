@@ -59,17 +59,20 @@ jobs:
         run: make cef
       - name: Test
         run: scripts/swiftw test
-      # Retries once, and only for the documented teardown-watchdog flake after the success marker.
+      # Retries once, and only for the documented teardown-watchdog flake after the success marker. The logs go to a
+      # directory without a leading dot because upload-artifact skips hidden paths such as .build.
       - name: Check Chromium rendering
         timeout-minutes: 20
+        env:
+          SMOKE_LOG_DIR: smoke-logs
         run: scripts/run-smoke.sh
       - name: Keep smoke logs and crash reports
-        if: ${{ failure() || hashFiles('.build/smoke-logs/attempt-2/console.log') != '' }}
+        if: ${{ failure() || hashFiles('smoke-logs/attempt-2/console.log') != '' }}
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: smoke-logs-${{ matrix.runner }}
-          path: .build/smoke-logs
-          if-no-files-found: ignore
+          path: smoke-logs
+          if-no-files-found: warn
           retention-days: 14
       # bundle-app.sh ends with scripts/verify-bundle.sh, which fails the build on any packaging error.
       - name: Package and verify Chromium app and disk image

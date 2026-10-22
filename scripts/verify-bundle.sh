@@ -3,13 +3,15 @@
 # every Mach-O, code signatures (hardened runtime for Developer ID builds), per-process entitlements and stray files.
 # Read-only. Every problem is reported before the script exits non-zero, so one run shows everything to fix.
 #
-# Usage: verify-bundle.sh [--arch arm64|x86_64] [--require-developer-id] [--notarized] [APP]   (default dist/Cairn.app)
+# Usage: verify-bundle.sh [--arch arm64|x86_64] [--require-developer-id] [--notarized] [APP|ZIP|DMG]   (default dist/Cairn.app)
 #   --require-developer-id  fail unless the app carries a hardened-runtime, timestamped Developer ID signature
 #   --notarized             also require a stapled ticket and Gatekeeper acceptance (run after notarization)
+#   ZIP or DMG              the shipped container: the zip is extracted and the image mounted read-only (both under
+#                           .build) and the Cairn.app inside is verified, so what users download is what is checked
 # Bash 3.2 compatible (macOS /bin/bash).
 set -uo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd -P)"
-usage="Usage: verify-bundle.sh [--arch arm64|x86_64] [--require-developer-id] [--notarized] [APP]"
+usage="Usage: verify-bundle.sh [--arch arm64|x86_64] [--require-developer-id] [--notarized] [APP|ZIP|DMG]"
 arch="" require_developer_id=0 notarized=0 app=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -22,6 +24,32 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 app="${app:-$root/dist/Cairn.app}"
+container="" scratch="" mounted=0
+cleanup() {
+  if [[ "$mounted" == 1 ]]; then
+    hdiutil detach -quiet "$scratch/mount" >/dev/null 2>&1 || hdiutil detach -quiet -force "$scratch/mount" >/dev/null 2>&1
+  fi
+  [[ -z "$scratch" ]] || rm -rf "$scratch"
+}
+trap cleanup EXIT
+case "$app" in
+  *.zip|*.dmg)
+    [[ -f "$app" ]] || { echo "ERROR: $app does not exist." >&2; exit 2; }
+    container="$(cd "$(dirname "$app")" && pwd -P)/$(basename "$app")"
+    mkdir -p "$root/.build"
+    scratch="$(mktemp -d "$root/.build/verify-bundle.XXXXXX")" || { echo "ERROR: cannot create a scratch directory under .build." >&2; exit 2; }
+    if [[ "$container" == *.zip ]]; then
+      ditto -x -k "$container" "$scratch/unpacked" || { echo "ERROR: cannot extract $container." >&2; exit 2; }
+      app="$scratch/unpacked/Cairn.app"
+    else
+      mkdir "$scratch/mount"
+      hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "$scratch/mount" "$container" >/dev/null \
+        || { echo "ERROR: cannot mount $container." >&2; exit 2; }
+      mounted=1
+      app="$scratch/mount/Cairn.app"
+    fi
+    [[ -d "$app/Contents" ]] || { echo "FAIL: ${container##*/} does not contain Cairn.app at its top level." >&2; exit 1; } ;;
+esac
 [[ -d "$app/Contents" ]] || { echo "ERROR: $app is not an application bundle. Run scripts/bundle-app.sh first." >&2; exit 2; }
 app="$(cd "$app" && pwd -P)"
 contents="$app/Contents"
@@ -233,15 +261,33 @@ while IFS= read -r -d '' link; do
   [[ "$resolved" == "$app"/* ]] || fail "${link#"$app"/} is a symlink that leaves the bundle"
 done < <(find "$app" -type l -print0)
 
+# --- Disk image ---------------------------------------------------------------------------------------------------
+if [[ "$container" == *.dmg ]]; then
+  volume="$(dirname "$app")"
+  for item in "$volume"/*; do
+    case "${item##*/}" in Cairn.app|Applications) ;; *) fail "unexpected item in the disk image: ${item##*/}" ;; esac
+  done
+  [[ "$(readlink "$volume/Applications" 2>/dev/null)" == /Applications ]] \
+    || fail "the disk image's Applications entry must be a symlink to /Applications"
+  if [[ "$developer_id" == 1 ]]; then
+    codesign --verify --strict "$container" 2>/dev/null || fail "the disk image is not validly signed (codesign --verify --strict)"
+  fi
+fi
+
 # --- Gatekeeper (after notarization) ----------------------------------------------------------------------------
 if [[ "$notarized" == 1 ]]; then
   [[ "$developer_id" == 1 ]] || fail "--notarized needs a Developer ID build"
   xcrun stapler validate "$app" >/dev/null 2>&1 || fail "no valid stapled notarization ticket"
   spctl --assess --type execute "$app" >/dev/null 2>&1 || fail "Gatekeeper rejects the application (spctl --assess)"
+  if [[ "$container" == *.dmg ]]; then
+    xcrun stapler validate "$container" >/dev/null 2>&1 || fail "the disk image has no valid stapled notarization ticket"
+    spctl --assess --type open --context context:primary-signature "$container" >/dev/null 2>&1 \
+      || fail "Gatekeeper rejects the disk image (spctl --assess --type open)"
+  fi
 fi
 
 if [[ $failures -gt 0 ]]; then
-  echo "verify-bundle: $failures problem(s) in $app" >&2
+  echo "verify-bundle: $failures problem(s) in ${container:-$app}" >&2
   exit 1
 fi
-echo "Verified ${app##*/} (${arch:-unknown arch}, $mode): layout, Info.plist, architecture, signatures, entitlements."
+echo "Verified ${container:+${container##*/}: }${app##*/} (${arch:-unknown arch}, $mode): layout, Info.plist, architecture, signatures, entitlements."
