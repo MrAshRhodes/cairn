@@ -229,6 +229,58 @@ private func request(_ id: String, origin: String = "https://example.com",
         #expect(model.prompts.front(id) == nil)
     }
 
+    @Test func navigationDismissalMakesOldPromptAnswersInert() {
+        let (model, _, tab, id) = makeModel()
+        model.engineTab(tab, requestsPermission: request("m-old"))
+        model.engineTab(tab, requestsJSDialog: .init(id: "js-old", kind: .confirm, message: "old page"))
+        model.engineTab(tab, requestsAuthentication: .init(id: "a-old", host: "old.example", port: 443,
+                                                          realm: "", scheme: "basic", isProxy: false, url: nil))
+        // The bridge cancels CEF callbacks and emits these at main-frame OnBeforeBrowse,
+        // including reload, before any prompt for the next document can be registered.
+        model.engineTab(tab, dismissesPermission: "m-old")
+        model.engineTab(tab, dismissesJSDialog: "js-old")
+        model.engineTab(tab, dismissesAuthentication: "a-old")
+        model.engineTab(tab, requestsPermission: request("m-new", origin: "https://new.example"))
+        model.answerPermission("m-old", tab: id, allow: true, remember: true)
+        model.answerJSDialog("js-old", tab: id, accept: true, suppressFurther: true)
+        model.answerAuthentication("a-old", tab: id, username: "private", password: "private")
+        #expect(model.prompts.front(id)?.id == "m-new")
+        #expect(tab.permissions.isEmpty)
+        #expect(tab.dialogs.isEmpty)
+        #expect(tab.auth.isEmpty)
+        #expect(model.sitePermissions.entries.isEmpty)
+    }
+
+    @Test func wrongKindOrNonfrontAnswerDoesNotConsumeAnotherPrompt() {
+        let (model, _, tab, id) = makeModel()
+        model.engineTab(tab, requestsPermission: request("m1"))
+        model.engineTab(tab, requestsJSDialog: .init(id: "js1", kind: .confirm, message: "waiting"))
+        model.answerJSDialog("m1", tab: id, accept: true)
+        model.answerAuthentication("m1", tab: id, username: "user", password: "pw")
+        model.answerJSDialog("js1", tab: id, accept: true)
+        #expect(model.prompts.queues[id]?.map(\.id) == ["m1", "js1"])
+        #expect(tab.dialogs.isEmpty)
+        #expect(tab.auth.isEmpty)
+        model.answerPermission("m1", tab: id, allow: false, remember: false)
+        model.answerPermission("js1", tab: id, allow: true, remember: true)
+        #expect(model.prompts.front(id)?.id == "js1")
+        #expect(model.sitePermissions.entries.isEmpty)
+    }
+
+    @Test func staleAnswersAfterUnloadCannotReachReplacementTab() {
+        let (model, engine, tab, id) = makeModel()
+        model.engineTab(tab, requestsPermission: request("old"))
+        model.unloadTab(id)
+        _ = model.liveTab(for: id)
+        let replacement = engine.tabs.last!
+        model.engineTab(replacement, requestsPermission: request("new"))
+        model.answerPermission("old", tab: id, allow: true, remember: true)
+        #expect(tab.permissions["old"] == false)
+        #expect(replacement.permissions.isEmpty)
+        #expect(model.prompts.front(id)?.id == "new")
+        #expect(model.sitePermissions.entries.isEmpty)
+    }
+
     @Test func certificateNoticeIsOnlyForThePageAndClearsOnSuccess() {
         let (model, _, tab, id) = makeModel()
         let url = URL(string: "https://example.com/page")!

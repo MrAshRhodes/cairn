@@ -137,6 +137,7 @@ public protocol EngineTabPromptEvents: EngineTabEvents {
     func engineTab(_ tab: EngineTab, requestsJSDialog request: EngineJSDialogRequest)
     func engineTab(_ tab: EngineTab, dismissesJSDialog id: String)
     func engineTab(_ tab: EngineTab, requestsAuthentication request: EngineAuthRequest)
+    func engineTab(_ tab: EngineTab, dismissesAuthentication id: String)
     func engineTab(_ tab: EngineTab, blockedCertificate error: EngineCertificateError)
 }
 
@@ -146,6 +147,7 @@ public extension EngineTabPromptEvents {
     func engineTab(_ tab: EngineTab, requestsJSDialog request: EngineJSDialogRequest) {}
     func engineTab(_ tab: EngineTab, dismissesJSDialog id: String) {}
     func engineTab(_ tab: EngineTab, requestsAuthentication request: EngineAuthRequest) {}
+    func engineTab(_ tab: EngineTab, dismissesAuthentication id: String) {}
     func engineTab(_ tab: EngineTab, blockedCertificate error: EngineCertificateError) {}
 }
 

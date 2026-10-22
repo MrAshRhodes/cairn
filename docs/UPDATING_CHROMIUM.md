@@ -156,10 +156,22 @@ this hook. Explicit tab/app close currently forces close (beforeunload cancellat
 is not supported).
 
 Quitting is bounded. If browsers have not all closed (or a browser creation is still
-pending) 4 s after the hook starts, the bridge drops its counters and calls `CefShutdown`
-anyway; a watchdog on a background queue exits the process after 10 s if `CefShutdown`
-itself blocks, and the application coordinator replies to AppKit after 12 s regardless.
+pending) 4 s after the hook starts, the bridge logs their counts and retries closing.
+It never discards live browsers or pending-creation bookkeeping to call `CefShutdown`.
+A watchdog on a background queue terminates with **exit status 1**, an explicit unclean
+shutdown diagnostic, and no success completion after 10 s if closing, creation or
+`CefShutdown` itself stops making progress. This last resort can lose Chromium writes;
+it is a failure, not evidence of a clean profile flush. Pending download destination
+callbacks and page prompts are cancelled before teardown.
 A browser whose creation is not confirmed within 20 s is abandoned and the tab reports an error.
+Lifecycle regressions can be run without launching Chromium:
+`scripts/swiftw test --filter 'TabPromptTests|SitePermissionStoreTests'` and
+`python3 -m unittest discover -s engine/tests -p test_lifecycle.py -v`.
+The latter includes source-contract guards plus a native pending-callback registry test
+(requires the already-prepared CEF headers/wrapper; it never fetches or initializes CEF).
+Real multi-tab/popup/DevTools close, active-download quit and blocked-main-thread shutdown
+still require bundled-engine smoke/manual verification; these unit checks do not prove a
+profile flush or the native timeout path.
 
 ## Tab health and recovery
 
@@ -222,7 +234,12 @@ Explicit limitations, not silent claims of support:
   the tab that raised them. Site permissions are denied unless allowed; decisions are
   remembered per Space and origin in `permissions.json` and managed under Settings →
   Permissions. HTTP auth needs `--disable-chrome-login-prompt` (set in `CCRuntime.mm`);
-  credentials are never stored. Certificate errors are always refused and explained, with no
+  credentials are never stored. Auth requests arrive on CEF's IO thread and are marshalled
+  to the main thread, rejecting requests queued across a navigation. Main-frame navigation
+  (including reload), renderer termination and browser close cancel outstanding auth,
+  JavaScript and permission callbacks and dismiss their cards. Opaque per-instance request
+  IDs and front-of-queue/type checks prevent stale cards answering a new page's prompt.
+  Certificate errors are always refused and explained, with no
   proceed option. Not done: screen capture (denied), `beforeunload` on tab/app close (close
   still forces), Chromium-side permission storage.
 * CEF's own downloads are cancelled and URLs are delegated to Cairn. Transferring

@@ -2,6 +2,7 @@
 // lifecycle bookkeeping (Client::browser, the `clients` map, request-context cleanup, shutdown completion),
 // so it is the one handler that keeps a reference to its Client.
 #import "../CCInternal.h"
+#import "CCPending.h"
 #include <algorithm>
 #include <map>
 
@@ -33,7 +34,13 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
   }
   void OnBeforeClose(CefRefPtr<CefBrowser> b) override {
     CefRefPtr<Client> keepAlive(&client_);
-    [owner cancelReplies:@"Tab closed"];
+    auto tab = owner;
+    // An abandoned creation can finish after this tab has already started a replacement browser.
+    if (tab && tab.adoptedClient.get() == &client_) {
+      tab.closing = YES;
+      CancelPending(tab);
+      [tab cancelReplies:@"Tab closed"];
+    }
     client_.registration = nullptr;
     client_.browser = nullptr;
     client_.container = nil;

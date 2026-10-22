@@ -5,9 +5,20 @@
 // handler itself and never touches its Client.
 #import "../CCInternal.h"
 #import "CCPending.h"
+#include <atomic>
+#include "include/cef_task.h"
 
 namespace cc {
 namespace {
+class AuthPromptTask final : public CefTask {
+ public:
+  explicit AuthPromptTask(void (^work)(void)) : work_([work copy]) {}
+  void Execute() override { work_(); work_ = nil; }
+ private:
+  void (^work_)(void);
+  IMPLEMENT_REFCOUNTING(AuthPromptTask);
+};
+
 class RequestHandler final : public TabHandler, public CefRequestHandler {
  public:
   RequestHandler(Client& client, CefRefPtr<CefResourceRequestHandler> resource)
@@ -16,6 +27,16 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
       CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, CefRefPtr<CefRequest>, bool, bool,
       const CefString&, bool&) override {
     return resource_;
+  }
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest>,
+                      bool, bool) override {
+    auto tab = owner;
+    if (!tab || tab.closing || stopping || tab.cefBrowser != browser) return true;
+    if (frame && frame->IsMain()) {
+      ++navigationGeneration_;
+      CancelPending(tab);
+    }
+    return false;
   }
   // Middle- and Cmd-click reach here (not OnBeforePopup); without this CEF navigates the source tab.
   bool OnOpenURLFromTab(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, const CefString& url,
@@ -26,20 +47,34 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
     if (gesture) [tab.delegate chromiumTab:tab popup:String(url) activate:!background];
     return true;
   }
-  bool GetAuthCredentials(CefRefPtr<CefBrowser>, const CefString& originURL, bool isProxy, const CefString& host,
+  bool GetAuthCredentials(CefRefPtr<CefBrowser> browser, const CefString& originURL, bool isProxy, const CefString& host,
                           int port, const CefString& realm, const CefString& scheme,
                           CefRefPtr<CefAuthCallback> callback) override {
-    auto tab = owner;
-    if (!tab || ![tab.delegate conformsToProtocol:@protocol(CCChromiumTabRequestDelegate)]) return false;
-    NSString *requestID = [NSString stringWithFormat:@"a%llu", ++counter_];
-    Pending(tab)[requestID] = [^(NSDictionary *answer) {
-      NSString *user = answer[@"username"];
-      if (user) callback->Continue(CefString(user.UTF8String), CefString(((NSString *)answer[@"password"] ?: @"").UTF8String));
-      else callback->Cancel();
-    } copy];
-    [(id<CCChromiumTabRequestDelegate>)tab.delegate chromiumTab:tab requestsAuthentication:requestID
-        url:String(originURL) host:String(host) port:port realm:String(realm) scheme:String(scheme) isProxy:isProxy];
-    return true;
+    // CEF calls this on IO, not UI. Never touch the tab/delegate/pending dictionary there.
+    const uint64_t generation = navigationGeneration_.load();
+    const int browserID = browser->GetIdentifier();
+    CefRefPtr<RequestHandler> keepAlive(this);
+    NSString *url = String(originURL), *hostname = String(host), *challenge = String(realm), *method = String(scheme);
+    // Keep this task in CEF's queue, not GCD: any queued callback must be released before
+    // CefShutdown returns and the runtime unloads the library.
+    return CefPostTask(TID_UI, new AuthPromptTask(^{
+      auto tab = keepAlive->owner;
+      auto current = tab ? tab.cefBrowser : nullptr;
+      if (!tab || tab.closing || stopping || generation != keepAlive->navigationGeneration_.load() ||
+          !current || current->GetIdentifier() != browserID ||
+          ![tab.delegate conformsToProtocol:@protocol(CCChromiumTabRequestDelegate)]) {
+        callback->Cancel();
+        return;
+      }
+      NSString *requestID = [@"a" stringByAppendingString:NSUUID.UUID.UUIDString];
+      Pending(tab)[requestID] = [^(NSDictionary *answer) {
+        NSString *user = answer[@"username"];
+        if (user) callback->Continue(CefString(user.UTF8String), CefString(((NSString *)answer[@"password"] ?: @"").UTF8String));
+        else callback->Cancel();
+      } copy];
+      [(id<CCChromiumTabRequestDelegate>)tab.delegate chromiumTab:tab requestsAuthentication:requestID
+          url:url host:hostname port:port realm:challenge scheme:method isProxy:isProxy];
+    }));
   }
   bool OnCertificateError(CefRefPtr<CefBrowser>, cef_errorcode_t error, const CefString& url,
                           CefRefPtr<CefSSLInfo> info, CefRefPtr<CefCallback>) override {
@@ -68,8 +103,12 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
     return true; // The tab ends the hang with Terminate() if the page does not recover.
   }
   void OnRenderProcessResponsive(CefRefPtr<CefBrowser>) override { [owner renderProcessResponsive]; }
-  void OnRenderProcessTerminated(CefRefPtr<CefBrowser>, TerminationStatus status, int code,
+  void OnRenderProcessTerminated(CefRefPtr<CefBrowser> browser, TerminationStatus status, int code,
                                  const CefString& error) override {
+    ++navigationGeneration_;
+    auto tab = owner;
+    if (!tab || tab.cefBrowser != browser) return;
+    CancelPending(tab);
     NSString *reason;
     switch (status) {
       case TS_PROCESS_WAS_KILLED: reason = @"was stopped by the system"; break;
@@ -83,7 +122,7 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
   }
  private:
   CefRefPtr<CefResourceRequestHandler> resource_;
-  uint64_t counter_ = 0;
+  std::atomic<uint64_t> navigationGeneration_{0};
   IMPLEMENT_REFCOUNTING(RequestHandler);
 };
 }

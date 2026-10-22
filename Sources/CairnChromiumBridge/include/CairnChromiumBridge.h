@@ -195,6 +195,9 @@ typedef NS_ENUM(NSInteger, CCPopupDisposition) {
 - (void)chromiumTab:(CCChromiumTab *)tab blockedCertificate:(NSString *)url code:(NSInteger)code
             subject:(NSString *)subject issuer:(NSString *)issuer validFrom:(double)validFrom
          validUntil:(double)validUntil;
+@optional
+// Navigation/close invalidated this challenge; an answer with this ID is no longer accepted.
+- (void)chromiumTab:(CCChromiumTab *)tab dismissesAuthentication:(NSString *)requestID;
 @end
 @interface CCChromiumTab (Request)
 // A nil username cancels the request.

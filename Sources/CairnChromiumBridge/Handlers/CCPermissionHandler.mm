@@ -63,7 +63,7 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
                                       const CefString& origin, uint32_t requested,
                                       CefRefPtr<CefMediaAccessCallback> callback) override {
     NSArray<NSString *> *kinds = MediaKinds(requested);
-    NSString *requestID = [NSString stringWithFormat:@"m%llu", ++counter_];
+    NSString *requestID = [@"m" stringByAppendingString:NSUUID.UUID.UUIDString];
     auto finish = ^(NSDictionary *answer) {
       if ([answer[@"allow"] boolValue]) callback->Continue(requested); else callback->Cancel();
     };
@@ -73,7 +73,7 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
   bool OnShowPermissionPrompt(CefRefPtr<CefBrowser> browser, uint64_t promptID, const CefString& origin,
                               uint32_t requested, CefRefPtr<CefPermissionPromptCallback> callback) override {
     NSArray<NSString *> *kinds = PromptKinds(requested);
-    NSString *requestID = [NSString stringWithFormat:@"p%llu", promptID];
+    NSString *requestID = PromptID(promptID);
     auto finish = ^(NSDictionary *answer) {
       callback->Continue([answer[@"allow"] boolValue] ? CEF_PERMISSION_RESULT_ACCEPT : CEF_PERMISSION_RESULT_DENY);
     };
@@ -83,7 +83,7 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
   void OnDismissPermissionPrompt(CefRefPtr<CefBrowser>, uint64_t promptID,
                                  cef_permission_request_result_t) override {
     auto tab = owner;
-    NSString *requestID = [NSString stringWithFormat:@"p%llu", promptID];
+    NSString *requestID = PromptID(promptID);
     if (!tab || !Pending(tab)[requestID]) return;
     [Pending(tab) removeObjectForKey:requestID];
     if ([tab.delegate conformsToProtocol:@protocol(CCChromiumTabPermissionDelegate)])
@@ -91,6 +91,9 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
   }
 
  private:
+  NSString *PromptID(uint64_t identifier) {
+    return [NSString stringWithFormat:@"p%@:%llu", instanceID_, identifier];
+  }
   // Returns true: this handler always answers, either now (deny) or through Swift later.
   bool Forward(CefRefPtr<CefBrowser> browser, NSString *requestID, const CefString& origin,
                NSArray<NSString *> *kinds, PendingAnswer finish) {
@@ -98,7 +101,9 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
     id<CCChromiumTabPermissionDelegate> delegate = nil;
     if ([tab.delegate conformsToProtocol:@protocol(CCChromiumTabPermissionDelegate)])
       delegate = (id<CCChromiumTabPermissionDelegate>)tab.delegate;
-    if (!tab || !delegate || !kinds) { finish(@{@"allow": @NO}); return true; }
+    if (!tab || tab.closing || stopping || tab.cefBrowser != browser || !delegate || !kinds) {
+      finish(@{@"allow": @NO}); return true;
+    }
     Pending(tab)[requestID] = [finish copy];
     CefRefPtr<CefFrame> main = browser->GetMainFrame();
     NSString *topLevel = main ? String(main->GetURL()) : @"";
@@ -106,7 +111,7 @@ class PermissionHandler final : public TabHandler, public CefPermissionHandler {
     return true;
   }
 
-  uint64_t counter_ = 0;
+  NSString *instanceID_ = NSUUID.UUID.UUIDString;
   IMPLEMENT_REFCOUNTING(PermissionHandler);
 };
 }
