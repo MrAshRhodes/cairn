@@ -59,6 +59,8 @@ jobs:
           path: chromium-status
           if-no-files-found: ignore
           retention-days: 14
+          # A re-run of this job replaces the report the tracking issue reads.
+          overwrite: true
 
   propose:
     needs: check

@@ -78,6 +78,8 @@ jobs:
           path: smoke-logs
           if-no-files-found: warn
           retention-days: 14
+          # A re-run of the failed job uploads again under the same name.
+          overwrite: true
       # bundle-app.sh ends with scripts/verify-bundle.sh, which fails the build on any packaging error.
       - name: Package and verify Chromium app and disk image
         run: |

@@ -159,6 +159,8 @@ jobs:
           path: release-logs
           if-no-files-found: ignore
           retention-days: 14
+          # A re-run of the failed job uploads again under the same name.
+          overwrite: true
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-${{ matrix.arch }}
