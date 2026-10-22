@@ -14,6 +14,9 @@ enum SmokeError: Error { case failed(String) }
     var externalURLs: [URL] = []
     var faviconEvents: [UUID: [NSImage?]] = [:]
     var audioEvents: [UUID: [Bool]] = [:]
+    var popupTabs: [EngineTab] = []
+    var blockedPopups = 0
+    var closeRequests: [UUID] = []
 
     init(root: URL, base: URL) {
         self.root = root
@@ -174,6 +177,7 @@ enum SmokeError: Error { case failed(String) }
             try require(externalURLs.first?.absoluteString == "mailto:smoke@example.com" && first.state.errorMessage == nil,
                         "external protocol is reported to the app, never launched by Chromium")
             try await runMedia()
+            try await checkPopups()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
@@ -190,8 +194,8 @@ enum SmokeError: Error { case failed(String) }
     func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) { faviconEvents[tab.id, default: []].append(image) }
     func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) { popups += 1 }
     func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) {}
-    func engineTabDidRequestClose(_ tab: EngineTab) { tab.close() }
     func engineTab(_ tab: EngineTab, requestsExternalURL url: URL) { externalURLs.append(url) }
+    func engineTabDidRequestClose(_ tab: EngineTab) { closeRequests.append(tab.id); tab.close() }
 }
 
 MainActor.assumeIsolated {

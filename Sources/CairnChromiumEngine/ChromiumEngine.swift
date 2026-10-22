@@ -45,10 +45,15 @@ public final class ChromiumEngine: BrowserEngine {
 
     public func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab {
         let tab = ChromiumTab(configuration: configuration, error: initializationError)
-        tabs[tab.id] = WeakTab(tab)
-        tabs = tabs.filter { $0.value.value != nil }
+        track(tab)
         if let initialURL { tab.load(initialURL) }
         return tab
+    }
+
+    func track(_ tab: ChromiumTab) {
+        tab.engine = self
+        tabs[tab.id] = WeakTab(tab)
+        tabs = tabs.filter { $0.value.value != nil }
     }
 
     public func clearBrowsingData(profileID: String, kinds: Set<BrowsingDataKind>) async {

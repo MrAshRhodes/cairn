@@ -18,8 +18,10 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     let bridge: CCChromiumTab
     private let startupError: Error?
     private(set) var closed = false
+    weak var engine: ChromiumEngine?
+    var popupBudget = PopupBudget()
     var view: NSView { bridge.view }
-    private(set) var state = EngineTabState()
+    var state = EngineTabState()
     weak var delegate: EngineTabDelegate? {
         didSet { delegate?.engineTab(self, didChange: state) }
     }
@@ -36,6 +38,16 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
         super.init()
         bridge.delegate = self
         if let error { report(error.localizedDescription) }
+    }
+
+    /// A popup CEF creates for `opener`: same profile and request context, `window.opener` intact.
+    init(popupOf opener: ChromiumTab) {
+        profileID = opener.profileID
+        startupError = nil
+        engine = opener.engine
+        bridge = CCChromiumTab(adoptingPopupFrom: opener.bridge)
+        super.init()
+        bridge.delegate = self
     }
 
     func report(_ message: String) {

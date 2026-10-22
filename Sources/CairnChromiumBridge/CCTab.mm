@@ -38,6 +38,8 @@ using namespace cc;
   if (_client && _client->browser && running) _client->browser->GetHost()->CloseBrowser(true);
 }
 - (CefRefPtr<CefBrowser>)cefBrowser { return _client ? _client->browser : nullptr; }
+- (void)adoptClient { if (!_client) _client = new Client(self); }
+- (CefRefPtr<CefClient>)adoptedClient { return _client; }
 - (void)ensureBrowser {
   if (_client || self.closing || !running || stopping || !self.view.window) return;
   if (!ready) {

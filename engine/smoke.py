@@ -47,6 +47,8 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         elif route in ("/media.html", "/media-again.html"):
             body = (ROOT / "engine/fixtures/media.html").read_bytes()
             extra_headers["Set-Cookie"] = "fixture=1; Path=/"
+        elif route.startswith("/popups/"):
+            body = (ROOT / "engine/fixtures/popups.html").read_bytes()
         elif route == "/probe.json":
             body = json.dumps({"userAgent": self.headers.get("User-Agent", "")}).encode()
             content_type = "application/json"

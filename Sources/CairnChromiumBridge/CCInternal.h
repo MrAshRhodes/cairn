@@ -66,6 +66,9 @@ typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
 // The CEF browser, or null until CEF created it. Categories (CCTab+<Feature>.mm) cannot see the
 // tab's ivars, so they reach CEF through this.
 - (CefRefPtr<CefBrowser>)cefBrowser;
+// Popup adoption (CCTab+LifeSpan.mm): the client CEF is handed for a popup, created up front.
+- (void)adoptClient;
+- (CefRefPtr<CefClient>)adoptedClient;
 @end
 
 namespace cc {

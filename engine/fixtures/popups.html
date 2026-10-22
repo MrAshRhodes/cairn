@@ -1,0 +1,30 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>popup opener</title>
+<body>
+<button id="btnOpen" style="position:absolute;left:20px;top:20px;width:120px;height:40px">open</button>
+<button id="btnBlank" style="position:absolute;left:160px;top:20px;width:120px;height:40px">blank</button>
+<button id="btnFlood" style="position:absolute;left:300px;top:20px;width:120px;height:40px">flood</button>
+<a id="lnkNoopener" href="/popups/child?noopener" target="_blank" rel="noopener"
+   style="position:absolute;left:20px;top:100px;width:200px;height:40px;display:block">noopener link</a>
+<script>
+const params = new URLSearchParams(location.search);
+if (location.pathname === '/popups/child') {
+  document.title = 'popup child';
+  if (window.opener) {
+    window.opener.postMessage({hasOpener: true, name: window.name, cookie: document.cookie, search: location.search}, '*');
+  }
+} else {
+  if (params.get('cookie')) document.cookie = params.get('cookie') + '=1; path=/';
+  window.log = [];
+  window.win = null;
+  window.addEventListener('message', e => window.log.push({data: e.data, origin: e.origin, fromPopup: e.source === window.win}));
+  document.getElementById('btnOpen').onclick = () => { window.win = window.open('/popups/child', 'win1'); window.openedNonNull = window.win !== null; };
+  document.getElementById('btnBlank').onclick = () => {
+    window.win = window.open('', 'blankwin');
+    window.win.document.write('<title>blank popup</title>written by opener');
+    window.win.document.close();
+  };
+  document.getElementById('btnFlood').onclick = () => { for (let i = 0; i < 20; i++) window.open('/popups/child?flood=' + i); };
+}
+</script>

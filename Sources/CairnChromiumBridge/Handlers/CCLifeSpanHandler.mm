@@ -3,6 +3,7 @@
 // so it is the one handler that keeps a reference to its Client.
 #import "../CCInternal.h"
 #include <algorithm>
+#include <map>
 
 namespace cc {
 namespace {
@@ -40,17 +41,51 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
     // Never call CefShutdown from inside a CEF callback stack.
     if (stopping && clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
   }
-  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int,
+  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int popupID,
                      const CefString& url, const CefString&, WindowOpenDisposition disposition,
-                     bool gesture, const CefPopupFeatures&, CefWindowInfo&, CefRefPtr<CefClient>&,
+                     bool gesture, const CefPopupFeatures&, CefWindowInfo& window, CefRefPtr<CefClient>& client,
                      CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
+    for (auto it = pendingPopups_.begin(); it != pendingPopups_.end();) {
+      CCChromiumTab *pending = it->second;
+      it = pending && pending.cefBrowser ? pendingPopups_.erase(it) : std::next(it);
+    }
     auto tab = owner;
-    if (gesture && !url.empty())
-      [tab.delegate chromiumTab:tab popup:String(url) activate:disposition != CEF_WOD_NEW_BACKGROUND_TAB];
-    return true; // New tabs are owned by Cairn; no unmanaged CEF windows or unsolicited popups.
+    id<CCChromiumTabLifeSpanDelegate> host = (id)tab.delegate;
+    if (stopping || tab.closing || ![host respondsToSelector:@selector(chromiumTab:hostsPopup:disposition:userGesture:)])
+      return true;
+    CCPopupDisposition kind = CCPopupDispositionUnsupported;
+    switch (disposition) {
+      case CEF_WOD_NEW_FOREGROUND_TAB: case CEF_WOD_NEW_POPUP: case CEF_WOD_NEW_WINDOW:
+        kind = CCPopupDispositionForeground; break;
+      case CEF_WOD_NEW_BACKGROUND_TAB: kind = CCPopupDispositionBackground; break;
+      default: break;
+    }
+    CCChromiumTab *popup = [host chromiumTab:tab hostsPopup:String(url) disposition:kind userGesture:gesture];
+    if (!popup) return true;
+    CefRefPtr<CefClient> popupClient = popup.adoptedClient;
+    if (!popupClient) return true;
+    // CEF creates the browser inside the popup tab's view, in the opener's request context.
+    pendingBrowsers++;
+    pendingPopups_[popupID] = popup;
+    window.SetAsChild((__bridge void *)popup.view,
+                      CefRect(0, 0, popup.view.bounds.size.width, popup.view.bounds.size.height));
+    window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
+    client = popupClient;
+    return false;
+  }
+  void OnBeforePopupAborted(CefRefPtr<CefBrowser>, int popupID) override {
+    auto it = pendingPopups_.find(popupID);
+    if (it == pendingPopups_.end()) return;
+    CCChromiumTab *popup = it->second;
+    pendingPopups_.erase(it);
+    pendingBrowsers--;
+    if (popup) [popup.delegate chromiumTabRequestsClose:popup];
+    if (stopping && clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
   }
  private:
   Client& client_;
+  // Popups handed to CEF whose browser does not exist yet; weak so an unfinished popup never outlives its tab.
+  std::map<int, __weak CCChromiumTab *> pendingPopups_;
   IMPLEMENT_REFCOUNTING(LifeSpanHandler);
 };
 }

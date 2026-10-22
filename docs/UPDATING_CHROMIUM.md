@@ -186,9 +186,6 @@ Explicit limitations, not silent claims of support:
   extension/DRM integration, DevTools frontend, PDF export or native printing API.
 * CEF's own downloads are cancelled and URLs are delegated to Cairn. Transferring
   authenticated CEF cookies to a separate downloader is not implemented.
-* Unsolicited popups are blocked; only HTTP(S) user-gesture popup requests become
-  app-managed tabs. Popup opener relationships and named-window reuse are not
-  retained.
 * Website data can be cleared per Space, per site and per kind (Preferences ▸ Privacy). CEF has no
   "clear browsing data" call, so clearing is layered: cookies, HTTP cache and HTTP-auth credentials
   through CEF; localStorage, IndexedDB, Cache Storage, service workers, File System and WebSQL
@@ -208,6 +205,15 @@ Explicit limitations, not silent claims of support:
   rules; nothing is fetched). It cancels third-party subresource and sub-frame requests to listed
   hosts, never main-frame navigations, with a per-site exemption. Cosmetic filtering, HTTPS
   upgrades and regex rules are not implemented.
+* Popups: a user-gesture `window.open`/`target=_blank` to HTTP(S) or an empty URL is created by CEF in
+  the opener's request context (an ephemeral opener gives an ephemeral popup) with `window.opener`,
+  `postMessage` and named windows intact, and shown as a new tab in the opener's Space; `window.close()`
+  from the popup closes only that tab. Popups without a user gesture, with another scheme, or beyond
+  3 per 10 seconds per tab are blocked and counted in a banner on the opener. Chromium's own blocker is
+  disabled (`disable-popup-blocking`) so every attempt reaches `OnBeforePopup`; the decision lives in
+  `PopupPolicy`. Middle/Cmd-click arrive through `OnOpenURLFromTab` as new tabs. Popup size/position
+  features are ignored, a popup's first document is not covered by Boost scripts (CEF starts its
+  navigation before Cairn can register scripts), and there is no per-site "always allow".
 * Signing/notarization, renderer sandbox behavior, certificate failures, private
   browsing, permissions and both CPU architectures require real-device release
   validation. Compilation is not a claim that those release gates passed.
@@ -322,7 +328,9 @@ python3 engine/smoke.py --development-ad-hoc
 
 The smoke test actually embeds the child view, loads local pages, evaluates JS,
 installs/removes scripts, finds text, changes zoom, takes a snapshot, checks Space
-and private isolation, clears cookies, blocks unsolicited popups and closes CEF.
+and private isolation, clears cookies, blocks unsolicited popups, checks popup adoption (`window.opener`,
+`postMessage`, shared/ephemeral context, `window.close()`, empty-URL and `rel=noopener` popups, flood budget)
+and closes CEF.
 It also verifies CSS grid, container queries, `:has()`, JavaScript modules, fetch,
 the network user agent's locked Chromium version, DOM events, viewport resizing
 and the captured compositor image dimensions.

@@ -29,7 +29,7 @@ public final class BrowserModel: EngineTabDelegate {
     public var searchTemplate = URLResolver.defaultSearchTemplate
 
     public let engine: BrowserEngine
-    @ObservationIgnored public private(set) var liveTabs: [UUID: EngineTab] = [:]
+    @ObservationIgnored public internal(set) var liveTabs: [UUID: EngineTab] = [:]
     /// Returns the user scripts (Boosts, modules) to inject for a URL. Set by the app at launch.
     @ObservationIgnored public var userScriptProvider: ((URL?) -> [EngineUserScript])?
     @ObservationIgnored public var downloadHandler: ((URL, String?) -> Void)?
@@ -38,8 +38,10 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
     @ObservationIgnored public var onError: ((Error) -> Void)?
     public private(set) var errorMessage: String?
-    @ObservationIgnored private(set) var liveProfileIDs: [UUID: String] = [:]
-    @ObservationIgnored private(set) var liveSpaceIDs: [UUID: UUID] = [:]
+    /// Popups refused per tab (see BrowserModel+Popups.swift); shown until dismissed.
+    public var blockedPopups: [UUID: Int] = [:]
+    @ObservationIgnored var liveProfileIDs: [UUID: String] = [:]
+    @ObservationIgnored var liveSpaceIDs: [UUID: UUID] = [:]
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine
@@ -103,7 +105,7 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func unloadTab(_ id: UUID) {
         let tab = liveTabs[id]
-        liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil
+        liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil; blockedPopups[id] = nil
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
         tab?.delegate = nil
         tab?.close()
@@ -279,7 +281,7 @@ public final class BrowserModel: EngineTabDelegate {
     }
 
     // MARK: EngineTabDelegate
-    private func itemID(for tab: EngineTab) -> UUID? { liveTabs.first { $0.value === tab }?.key }
+    func itemID(for tab: EngineTab) -> UUID? { liveTabs.first { $0.value === tab }?.key }
 
     public func engineTab(_ tab: EngineTab, didChange state: EngineTabState) {
         guard let id = itemID(for: tab) else { return }
