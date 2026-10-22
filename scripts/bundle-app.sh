@@ -85,6 +85,12 @@ done < <(find "$app/Contents/Frameworks" -depth -type d \
 codesign "${sign_args[@]}" --entitlements Resources/Cairn.entitlements "$app"
 codesign --verify --deep --strict "$app"
 python3 Resources/ReleaseTools/bundle.py verify "$app"
+# The packaging contract (layout, Info.plist, architecture, signatures, entitlements, stray files) gates every bundle.
+verify_args=(--arch "$ARCH")
+if [[ "$SIGNING_IDENTITY" != "-" ]]; then
+  verify_args+=(--require-developer-id)
+fi
+scripts/verify-bundle.sh "${verify_args[@]}" "$app"
 rm -rf dist/Cairn.app
 ditto "$app" dist/Cairn.app
 echo "Built $root/dist/Cairn.app ($ARCH; $CONFIGURATION)"
