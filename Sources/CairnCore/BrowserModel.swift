@@ -40,6 +40,9 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var onChange: (() -> Void)?
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
     @ObservationIgnored public var onError: ((Error) -> Void)?
+    /// Page tools (see BrowserModel+PageTools.swift): a tab's host changed / its zoom changed.
+    @ObservationIgnored public var onTabHostChanged: ((_ tabID: UUID, _ tab: EngineTab, _ url: URL) -> Void)?
+    @ObservationIgnored public var onTabZoomChanged: ((_ tabID: UUID, _ tab: EngineTab, _ zoom: Double) -> Void)?
     public private(set) var errorMessage: String?
     /// Popups refused per tab (see BrowserModel+Popups.swift); shown until dismissed.
     public var blockedPopups: [UUID: Int] = [:]
@@ -53,6 +56,7 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored var recoveryPolicies: [UUID: RecoveryPolicy] = [:]
     @ObservationIgnored var needsReload: Set<UUID> = []
     @ObservationIgnored var recoveryClock: () -> Date = { Date() }
+    func liveProfileID(_ id: UUID) -> String? { liveProfileIDs[id] }
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine
@@ -313,6 +317,7 @@ public final class BrowserModel: EngineTabDelegate {
             if !state.title.isEmpty { $0.title = state.title }
         }
         if item(id) != before { changed() }
+        if let url = state.url, url.host != previous?.url?.host { onTabHostChanged?(id, tab, url) }
         if let error = state.errorMessage, error != previous?.errorMessage {
             report(ServiceError.navigation(error))
         }

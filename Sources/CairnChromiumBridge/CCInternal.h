@@ -64,6 +64,9 @@ namespace cc { class Client; }
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, DevToolsReply> *replies;
 @property(nonatomic, copy) void (^findReply)(BOOL);
 @property(nonatomic, copy) NSString *lastFind;
+@property(nonatomic, copy) NSString *emulationLanguage;
+@property(nonatomic, copy) NSString *emulationUserAgent;
+- (void)applyEmulation;
 - (void)ensureBrowser;
 - (void)browserCreated;
 - (void)publish;

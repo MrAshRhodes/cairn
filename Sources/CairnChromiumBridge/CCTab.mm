@@ -131,10 +131,11 @@ NSTimeInterval NavigationWatchdogSeconds() {
   __weak CCChromiumTab *weakSelf = self;
   [self call:@"Page.enable" params:@{} reply:^(NSDictionary *, NSError *error) {
     auto tab = weakSelf;
-      if (!tab) return;
+    if (!tab) return;
     if (tab.bootToken != token || tab.closing) { [tab settleBoot]; [tab drainNavigation]; return; }
     if (!error) {
       tab.pageEnabled = YES;
+      [tab applyEmulation];
       [tab settleBoot];
       [tab setScripts:tab.configuredScripts];
       return;

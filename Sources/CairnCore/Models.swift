@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CairnEngineKit
 
 // FROZEN API (see CairnEngineKit/Engine.swift for the rule). Persistent, Codable value types.
 
@@ -142,6 +143,7 @@ public enum URLResolver {
     public static func isNavigable(_ url: URL) -> Bool {
         if isWebURL(url) { return true }
         if url.absoluteString == "about:blank" { return true }
+        if let inner = ViewSource.inner(of: url) { return isNavigable(inner) }
         return url.isFileURL && (url.host == nil || url.host == "" || url.host == "localhost")
             && url.path.hasPrefix("/") && !url.path.contains("\0")
     }

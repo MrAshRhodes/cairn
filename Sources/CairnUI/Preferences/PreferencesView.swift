@@ -80,6 +80,7 @@ public struct PreferencesView: View {
                     Text("\(Int(settings.sidebarWidth))").font(.caption.monospacedDigit()).frame(width: 32)
                 }
             }
+            PageToolsPreferencesSection(services: services)
             if !services.settingsWritable {
                 Label("Settings are read-only because their saved file could not be read.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)

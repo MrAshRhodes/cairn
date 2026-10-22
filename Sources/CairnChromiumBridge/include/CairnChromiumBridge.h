@@ -164,6 +164,26 @@ typedef NS_ENUM(NSInteger, CCPopupDisposition) {
 @end
 
 // [Print]
+// Page tools: printing, DevTools window, and per-tab language/user-agent emulation.
+@interface CCChromiumTab (Print)
+/// Presents the system print panel for the page.
+- (void)printPage;
+/// Writes the page as a PDF. `error` is nil on success.
+- (void)printToPDFAtPath:(NSString *)path completion:(void (^)(NSError *_Nullable error))completion;
+@end
+
+@interface CCChromiumTab (DevTools)
+@property(nonatomic, readonly) BOOL hasDevTools;
+/// Opens (or focuses) the DevTools window; a point inspects the element there, in view coordinates.
+- (void)showDevTools;
+- (void)showDevToolsInspectingPoint:(NSPoint)point;
+- (void)closeDevTools;
+@end
+
+@interface CCChromiumTab (Emulation)
+/// Empty strings keep Chromium's defaults. Applies to following navigations; before the first load when set early.
+- (void)setAcceptLanguage:(NSString *)acceptLanguage userAgent:(NSString *)userAgent;
+@end
 
 // [Request]
 // Authentication and blocked-certificate reports. There is deliberately no way to continue past a TLS error.

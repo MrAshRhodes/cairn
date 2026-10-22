@@ -190,6 +190,7 @@ enum SmokeError: Error { case failed(String) }
             try await checkDownloads()
             try await checkRendererCrashRecovery()
             try await checkNavigationWatchdog()
+            try await pageToolsChecks()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)

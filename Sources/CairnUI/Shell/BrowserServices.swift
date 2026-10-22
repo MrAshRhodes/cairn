@@ -68,6 +68,7 @@ public final class BrowserServices {
     public private(set) var moduleTrustRevision = 0
     var moduleReview: ModuleScriptReview?
     @ObservationIgnored private let workspaceStore: WorkspaceStore
+    @ObservationIgnored var siteZoom: SiteZoomStore?
     @ObservationIgnored private var archiveTimer: Timer?
     @ObservationIgnored private var mediaKeys: MediaKeyController?
 
@@ -204,6 +205,7 @@ public final class BrowserServices {
         }
         model.engineDownloadUpdateHandler = { [weak self] update in self?.downloads.applyEngineUpdate(update) }
         downloads.engineControl = { [weak model] action, id in model?.performEngineDownloadAction(action, id: id) }
+        installPageTools()
         applySettings()
         autoArchive()
         if let selected = model.selectedTabID { model.select(selected) }
@@ -214,6 +216,7 @@ public final class BrowserServices {
 
     public func applySettings() {
         model.searchTemplate = siteSearch.defaultEngine?.template ?? settings.searchTemplate
+        applyPageSettings()
         autoArchive()
     }
 
@@ -240,6 +243,8 @@ public final class BrowserServices {
         model.engineDownloadUpdateHandler = nil
         downloads.engineControl = nil
         model.onError = nil
+        model.onTabHostChanged = nil
+        model.onTabZoomChanged = nil
         downloads.onError = nil
         modules.deactivate()
         Array(model.liveTabs.keys).forEach { model.unloadTab($0) }
@@ -346,7 +351,7 @@ public final class BrowserServices {
     }
 
     public func commands() -> [Command] {
-        let localBase: [Command] = [
+        var localBase: [Command] = [
             .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", perform: { [weak self] _ in self?.showCommandBar(mode: .newTab) }),
             .init(id: "ui.new-blank-tab", title: "New Blank Tab", symbol: "plus.square", perform: { [weak self] _ in self?.newTab() }),
             .init(id: "ui.address", title: "Edit Address", symbol: "link", perform: { [weak self] _ in self?.editAddress() }),
@@ -373,6 +378,7 @@ public final class BrowserServices {
             .init(id: "ui.import", title: "Import from Another Browser…", symbol: "square.and.arrow.down", perform: { [weak self] _ in self?.presentImporter() }),
             .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", perform: { [weak self] _ in self?.findPresented = true }),
         ]
+        localBase += pageToolCommands()
         let local = localBase.map { command -> Command in
             var shown = command
             shown.shortcut = shortcuts.chord(for: command.id)?.display
