@@ -76,8 +76,11 @@ extension BrowserServices {
         let panes = model.splitTabIDs.count
         switch id {
         case "ui.close-tab", "ui.reload", "ui.hard-reload", "ui.stop", "ui.find", "ui.find-next", "ui.find-previous",
-             "ui.zoom-in", "ui.zoom-out", "ui.zoom-reset", "ui.copy-url", "ui.copy-markdown-link":
+             "ui.copy-url", "ui.copy-markdown-link":
             return hasTab && (!id.hasPrefix("ui.copy") || model.selectedTab?.url != nil)
+        case "ui.zoom-in", "ui.zoom-out", "ui.zoom-reset": return activeEngineTab != nil
+        case "ui.devtools", "ui.print", "ui.save-pdf": return activePageTools != nil
+        case "ui.view-source": return model.viewSourceURLForSelectedTab != nil
         case "ui.pin-tab": return model.selectedTabID.flatMap { model.locate($0)?.list }.map { $0 == .pinned || $0 == .today } ?? false
         case "ui.reopen-closed-tab": return model.canReopenClosedTab
         case "ui.clear-today": return !model.selectedSpace.tabs.isEmpty
@@ -117,6 +120,11 @@ extension BrowserServices {
         case "ui.zoom-in": setZoom((activeEngineTab?.zoom ?? 1) + 0.1)
         case "ui.zoom-out": setZoom((activeEngineTab?.zoom ?? 1) - 0.1)
         case "ui.zoom-reset": setZoom(1)
+        case "ui.reset-site-zoom": resetSiteZoom()
+        case "ui.devtools": toggleDevTools()
+        case "ui.view-source": viewSource()
+        case "ui.print": printPage()
+        case "ui.save-pdf": savePageAsPDF()
         case "ui.back": activeEngineTab?.goBack()
         case "ui.forward": activeEngineTab?.goForward()
         case "ui.history": sheet = .history

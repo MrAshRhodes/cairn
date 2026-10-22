@@ -21,6 +21,9 @@ Switching presets resets custom shortcuts.
 | Find, next, previous | ⌘F, ⌘G, ⇧⌘G |
 | Sidebar | ⇧⌘S |
 | Reload, hard reload, stop | ⌘R, ⇧⌘R, ⌘. |
+| Zoom in / out / actual size | ⌘+ / ⌘− / ⌘0 |
+| Developer Tools / view page source | ⌥⌘I / ⌥⌘U |
+| Print | ⌘P |
 | Back / forward | ⌘[ / ⌘] |
 | Next / previous tab | ⌥⌘↓ / ⌥⌘↑ |
 | Tab 1–8, last tab | ⌘1–⌘8, ⌘9 |
@@ -29,6 +32,11 @@ Switching presets resets custom shortcuts.
 | Next / previous Space | ⌥⌘→ / ⌥⌘← |
 | Toggle split view | ⇧⌘D |
 | History, Downloads, Settings | ⌘Y, ⌘J, ⌘, |
+
+**File → Save Page as PDF…** and **View → Reset Zoom for All Sites** start without a shortcut; assign one
+in the shortcuts pane if desired. Page tools also appear in the command bar. DevTools, printing and PDF export
+require a page engine that supports them, and View Page Source is enabled only for web and local file pages.
+Zoom uses the same per-site settings and limits whether invoked from a menu, a shortcut or the command bar.
 
 ## Changing shortcuts
 
@@ -39,6 +47,8 @@ a shortcut appear under Tools; if it collides with a bound key it is left unassi
 
 Changes are saved to `shortcuts.json`. An unreadable file is moved to `shortcuts.json.corrupt-<time>`, the default
 keymap is used, and a notice is shown.
+When a new version adds a default binding that conflicts with your saved remap, your remap is kept and the
+new action is left unbound. Fixed system shortcuts still take priority.
 
 ## Arc shortcuts Cairn does not implement
 

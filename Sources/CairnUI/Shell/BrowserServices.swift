@@ -69,6 +69,13 @@ public final class BrowserServices {
     var moduleReview: ModuleScriptReview?
     @ObservationIgnored private let workspaceStore: WorkspaceStore
     @ObservationIgnored var siteZoom: SiteZoomStore?
+    @ObservationIgnored var pdfDestinationChooser: (String) -> URL? = { filename in
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = filename
+        return panel.runModal() == .OK ? panel.url : nil
+    }
     @ObservationIgnored private var archiveTimer: Timer?
     @ObservationIgnored private var mediaKeys: MediaKeyController?
 

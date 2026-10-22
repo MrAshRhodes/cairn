@@ -76,7 +76,10 @@ Boosts with an explicit trust decision. Newer pieces: sidebar folders and Space 
 importer for Chromium-family browsers ([docs](docs/features/import.md)), a visual Boost
 editor with Zap and `.cairnboost` sharing ([docs](docs/features/boosts.md)), and link
 routing rules ([docs](docs/features/links.md); Peek overlay and quick window are not built
-yet). Downloads started by a page are performed by Chromium
+yet). Developer Tools, view source, printing / Save Page as PDF and per-site zoom are
+available through the menus and command bar, with remappable shortcuts.
+Downloads started by a page, including **Download Linked File** and **Save Image As…**
+in its context menu, are performed by Chromium
 itself, so the page's cookies, sign-in, POST body and `blob:` sources are kept; Cairn
 asks where to save, shows progress, and supports pause, resume and cancel. Only links
 pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
