@@ -6,6 +6,7 @@ public struct TabLocation: Equatable, Sendable {
     public var list: TabList
     public var spaceIndex: Int?
     public var index: Int
+    public init(list: TabList, spaceIndex: Int?, index: Int) { self.list = list; self.spaceIndex = spaceIndex; self.index = index }
 }
 
 /// Single source of truth for the browser's tabs, spaces and live engine tabs.
