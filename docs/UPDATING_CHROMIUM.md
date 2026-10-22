@@ -270,6 +270,24 @@ library validation. Use a real same-team identity for a hardened release.
 Non-hardened ad-hoc builds are **development-only**, even with the Chromium
 subprocess sandbox still enabled.
 
+## Source layout
+
+The Chromium code is split by CEF handler family, so a feature or a CEF API change touches
+few files. Under `Sources/CairnChromiumBridge/`:
+
+* `include/CairnChromiumBridge.h` is the only header Swift sees. It changes additively:
+  each feature owns a `// [Feature]` slot.
+* `CCInternal.h` (private shared declarations and the CEF-prepared `#error` guard),
+  `CCRuntime.mm` (start/stop, message pump, request contexts), `CCTab.mm` (the tab class)
+  and `CCClient.mm` (one factory call per handler family).
+* `Handlers/CC<Family>Handler.mm`: one CEF handler family per file. Skeleton families
+  return `nullptr`, which is CEF's default behavior. `CCTab+<Feature>.mm` holds tab commands.
+
+On the Swift side `CairnChromiumEngine` has `ChromiumEngine.swift` (engine, profiles) and
+`ChromiumTab.swift` (the `EngineTab`), extended by `ChromiumTab+<Feature>.swift`. SwiftPM
+compiles every source file below a target, so adding a file needs no manifest edit. After a
+CEF update, a compile error points at the one handler file that uses the changed API.
+
 ## Updating and verification
 
 ```sh

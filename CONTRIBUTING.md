@@ -23,6 +23,13 @@ Mutable browser state is main-actor isolated. Route tab/Space mutations through
 the browser model so persistence and view selection stay consistent. Installing
 delegates and user scripts must precede the initial page load.
 
+Chromium features live in their own files so parallel work rarely collides: a CEF
+callback in `Sources/CairnChromiumBridge/Handlers/CC<Family>Handler.mm` (skeletons are
+already registered), a tab command in `CCTab+<Feature>.mm`, and its public bridge API in
+your own `// [Feature]` slot of `include/CairnChromiumBridge.h`. The Swift side is
+`ChromiumTab+<Feature>.swift` plus an optional protocol in `EngineTabEvents+<Feature>.swift`;
+never change the frozen `EngineTabDelegate`. See `CCInternal.h` and `EngineTabEvents.swift`.
+
 ## Invariants to preserve
 
 - Space profiles isolate cookies and storage, including favorites and popups.
