@@ -189,12 +189,25 @@ Explicit limitations, not silent claims of support:
 * Unsolicited popups are blocked; only HTTP(S) user-gesture popup requests become
   app-managed tabs. Popup opener relationships and named-window reuse are not
   retained.
-* Cookies and HTTP cache can be cleared per persistent Space. All-origin local
-  storage deletion while running is **unsupported**: requesting it sets
-  `lastDataRemovalError`, a visible tab error and a diagnostic. Quit Cairn before
-  removing that Space's hashed directory; that removes **all** its Chromium
-  cookies/cache/storage too. The frozen engine protocol has no throwing deletion
-  result, so callers should present this limitation.
+* Website data can be cleared per Space, per site and per kind (Preferences ▸ Privacy). CEF has no
+  "clear browsing data" call, so clearing is layered: cookies, HTTP cache and HTTP-auth credentials
+  through CEF; localStorage, IndexedDB, Cache Storage, service workers, File System and WebSQL
+  through DevTools `Storage.clearDataForOrigin` on every http(s) origin the profile navigated to
+  (recorded in `<profile>/cairn-origins.json`, because DevTools cannot enumerate origins; a hidden
+  browser is borrowed when the Space has no open tab). Chromium cannot clear the cache per site, so
+  a per-site clear with "Cache" selected clears the whole Space's cache. A profile that predates
+  origin tracking also gets a one-time deletion of its storage directories at the next launch
+  (reported in Preferences). Partitioned third-party storage keys are not enumerated; deleting the
+  Space is the guaranteed erase.
+* Removing a Space deletes its profile directory (`<hash>.delete` marker first, honoured at the next
+  launch if Chromium still holds files). At startup Cairn also deletes profile directories no Space
+  references, only when the saved workspace was read successfully.
+* Persistent Spaces keep session cookies across relaunches (`persist_session_cookies`); private
+  contexts stay in memory and are discarded after their last tab closes.
+* Content blocking uses only a local, user-imported blocklist (hosts file, plain hosts or `||host^`
+  rules; nothing is fetched). It cancels third-party subresource and sub-frame requests to listed
+  hosts, never main-frame navigations, with a per-site exemption. Cosmetic filtering, HTTPS
+  upgrades and regex rules are not implemented.
 * Signing/notarization, renderer sandbox behavior, certificate failures, private
   browsing, permissions and both CPU architectures require real-device release
   validation. Compilation is not a claim that those release gates passed.

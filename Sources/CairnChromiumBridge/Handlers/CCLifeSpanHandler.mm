@@ -11,6 +11,7 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
   explicit LifeSpanHandler(Client& client) : TabHandler(client), client_(client) {}
   void OnAfterCreated(CefRefPtr<CefBrowser> created) override {
     pendingBrowsers--;
+    creating[client_.contextKey]--;
     client_.browser = created;
     clients[created->GetIdentifier()] = &client_;
     client_.registration = created->GetHost()->AddDevToolsMessageObserver(client_.devToolsObserver());
@@ -33,7 +34,7 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
     client_.browser = nullptr;
     client_.container = nil;
     clients.erase(b->GetIdentifier());
-    if (client_.ephemeral && std::none_of(clients.begin(), clients.end(), [&](const auto& item) {
+    if (client_.ephemeral && creating[client_.contextKey] <= 0 && std::none_of(clients.begin(), clients.end(), [&](const auto& item) {
           return item.second->contextKey == client_.contextKey;
         })) contexts.erase(client_.contextKey);
     // Never call CefShutdown from inside a CEF callback stack.

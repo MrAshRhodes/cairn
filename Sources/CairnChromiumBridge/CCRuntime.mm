@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <memory>
 #include "include/cef_application_mac.h"
-#include "include/cef_cookie.h"
 #include "include/cef_version.h"
 #include "include/wrapper/cef_library_loader.h"
 
@@ -49,25 +48,6 @@ class Application final : public CefApp, public CefBrowserProcessHandler {
   IMPLEMENT_REFCOUNTING(Application);
 };
 
-class Done final : public CefCompletionCallback {
- public:
-  explicit Done(void (^block)(void)) : block_([block copy]) {}
-  void OnComplete() override { block_(); }
- private:
-  void (^block_)(void);
-  IMPLEMENT_REFCOUNTING(Done);
-};
-class CookiesDone final : public CefDeleteCookiesCallback {
- public:
-  explicit CookiesDone(void (^block)(void)) : block_([block copy]) {}
-  void OnComplete(int) override {
-    auto callback = block_;
-    dispatch_async(dispatch_get_main_queue(), callback);
-  }
- private:
-  void (^block_)(void);
-  IMPLEMENT_REFCOUNTING(CookiesDone);
-};
 }
 
 namespace cc {
@@ -77,6 +57,9 @@ bool stopping = false;
 int pendingBrowsers = 0;
 std::map<std::string, CefRefPtr<CefRequestContext>> contexts;
 std::map<int, CefRefPtr<Client>> clients;
+std::map<std::string, int> creating;
+
+NSString *ProfileRoot() { return rootPath; }
 
 NSString *String(const CefString& value) {
   return [NSString stringWithUTF8String:value.ToString().c_str()] ?: @"";
@@ -94,6 +77,9 @@ CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral) {
   CefRequestContextSettings settings;
   if (!ephemeral) {
     CefString(&settings.cache_path) = [[rootPath stringByAppendingPathComponent:profile] UTF8String];
+    // Most login cookies have no expiry; Cairn restores tabs, so they must survive a relaunch.
+    settings.persist_session_cookies = true;
+    LoadTrackedOrigins(profile);
   }
   auto context = CefRequestContext::CreateContext(settings, nullptr);
   contexts[key] = context;
@@ -158,6 +144,7 @@ void FinishShutdown() {
     if (error) *error = Failure(@"CEF framework could not be loaded. Verify bundle layout, architecture and signatures.");
     return NO;
   }
+  ApplyPendingProfileWork(root);
   CefSettings settings;
   settings.external_message_pump = true;
   settings.command_line_args_disabled = true;
@@ -207,21 +194,5 @@ void FinishShutdown() {
   if (!shutdownCompletions) shutdownCompletions = [NSMutableArray array];
   [shutdownCompletions addObject:[completion copy]];
   [self shutdown];
-}
-+ (void)clearProfile:(NSString *)profile cookies:(BOOL)cookies cache:(BOOL)cache
-         completion:(void (^)(void))completion {
-  if (!running || stopping) { completion(); return; }
-  auto context = Context(profile, false);
-  dispatch_group_t group = dispatch_group_create();
-  if (cookies) {
-    dispatch_group_enter(group);
-    CefRefPtr<CookiesDone> done = new CookiesDone(^{ dispatch_group_leave(group); });
-    if (!context->GetCookieManager(nullptr)->DeleteCookies("", "", done)) done->OnComplete(0);
-  }
-  if (cache) {
-    dispatch_group_enter(group);
-    context->ClearHttpCache(new Done(^{ dispatch_group_leave(group); }));
-  }
-  dispatch_group_notify(group, dispatch_get_main_queue(), completion);
 }
 @end

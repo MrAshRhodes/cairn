@@ -17,8 +17,6 @@ NS_ASSUME_NONNULL_BEGIN
 + (NSString *)versionDescription;
 + (void)shutdown;
 + (void)shutdownWithCompletion:(void (^)(void))completion NS_SWIFT_NAME(shutdown(completion:));
-+ (void)clearProfile:(NSString *)profile cookies:(BOOL)cookies cache:(BOOL)cache
-         completion:(void (^)(void))completion;
 @end
 
 @interface CCChromiumTab : NSObject
@@ -111,5 +109,21 @@ NS_ASSUME_NONNULL_BEGIN
 // [Request]
 
 // [ResourceRequest]
+// Content blocking: immutable rule snapshot swapped under a lock; lookups run on Chromium's IO thread.
+@interface CCChromiumRuntime (ContentBlocking)
++ (void)setContentBlockingEnabled:(BOOL)enabled blockedHosts:(NSArray<NSString *> *)blockedHosts
+                      exemptSites:(NSArray<NSString *> *)exemptSites;
++ (NSUInteger)blockedRequestCount;
+@end
+
+// [SiteData]
+// `profile` is the hashed profile directory name. `site` is a host name or nil for the whole profile.
+@interface CCChromiumRuntime (SiteData)
++ (void)clearSiteDataForProfile:(NSString *)profile site:(nullable NSString *)site cookies:(BOOL)cookies
+                          cache:(BOOL)cache storage:(BOOL)storage
+                     completion:(void (^)(NSArray<NSString *> *failures))completion;
++ (void)deleteProfile:(NSString *)profile completion:(void (^)(void))completion;
++ (NSArray<NSString *> *)removeOrphanProfilesKeeping:(NSArray<NSString *> *)directories;
+@end
 
 NS_ASSUME_NONNULL_END

@@ -79,7 +79,9 @@ Downloads require a destination chosen by the user, safe filename handling and
 visible cancellation/failure. Authenticated downloads should use the engine's
 own session, not silently restart a request without its credentials.
 
-History and site data have explicit deletion controls. No history, cookies,
+History and site data have explicit deletion controls (per Space, per site, per data kind); removing a Space
+deletes its profile. A local, user-imported blocklist can block third-party requests, with per-site exemptions.
+No history, cookies,
 page text or customizations are sent to the project maintainers.
 
 Application updates use Sparkle with an independently generated Ed25519 public

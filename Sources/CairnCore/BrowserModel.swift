@@ -273,6 +273,11 @@ public final class BrowserModel: EngineTabDelegate {
         }
         repairReferences()
         changed()
+        // Deleting the Space deletes its cookies and storage, unless another Space shares the profile.
+        if !workspace.spaces.contains(where: { $0.profileID == space.profileID }),
+           let siteData = engine as? EngineSiteDataManaging {
+            Task { await siteData.deleteProfileData(profileID: space.profileID) }
+        }
     }
 
     // MARK: EngineTabDelegate

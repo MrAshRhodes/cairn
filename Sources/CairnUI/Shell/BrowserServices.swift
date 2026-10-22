@@ -50,6 +50,10 @@ public final class BrowserServices {
     public var findResult: Bool?
     public var zoom: Double = 1
     public var privacyBusy = false
+    /// Why the last website-data clear could not remove everything; shown in Preferences.
+    public internal(set) var siteDataNotice: String?
+    public internal(set) var contentBlocking = ContentBlockingStore()
+    public internal(set) var contentBlockingWritable = true
     public var hasUnsavedBoostChanges = false
     public private(set) var moduleTrustRevision = 0
     var moduleReview: ModuleScriptReview?
@@ -155,6 +159,8 @@ public final class BrowserServices {
             self?.downloads.start(url: url, suggestedFilename: filename)
             self?.sheet = .downloads
         }
+        loadContentBlocking()
+        removeOrphanProfiles()
         applySettings()
         autoArchive()
         if let selected = model.selectedTabID { model.select(selected) }
@@ -270,15 +276,6 @@ public final class BrowserServices {
         guard let history else { report("History is unavailable", detail: "History could not be opened during startup."); return }
         do { try history.clear() }
         catch { report("History could not be cleared", error: error) }
-    }
-
-    public func clearSiteData() async {
-        privacyBusy = true
-        let profiles = Set(model.workspace.spaces.map(\.profileID))
-        for profile in profiles {
-            await model.engine.clearBrowsingData(profileID: profile, kinds: Set(BrowsingDataKind.allCases))
-        }
-        privacyBusy = false
     }
 
     public func checkForUpdates() {

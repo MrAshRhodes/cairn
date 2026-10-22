@@ -55,10 +55,12 @@ using namespace cc;
   // New request contexts initialize asynchronously. CreateBrowserSync can reject
   // them before their browser context is ready; CreateBrowser waits correctly.
   pendingBrowsers++;
+  creating[_client->contextKey]++;
   bool accepted = CefBrowserHost::CreateBrowser(window, _client, "about:blank", settings, nullptr,
                                                 Context(self.profile, self.ephemeral));
   if (!accepted) {
     pendingBrowsers--;
+    creating[_client->contextKey]--;
     _client = nullptr; self.state[@"error"] = @"CEF failed to create an embedded browser."; [self publish]; return;
   }
 }

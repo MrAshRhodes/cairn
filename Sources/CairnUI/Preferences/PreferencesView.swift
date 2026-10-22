@@ -9,7 +9,6 @@ public struct PreferencesView: View {
     let services: BrowserServices?
     @ViewState<String> private var selectedTab = "general"
     @ViewState<Bool> private var clearHistoryConfirmation = false
-    @ViewState<Bool> private var clearDataConfirmation = false
     @ViewState<Bool> private var automaticUpdates = false
     @ViewState<ModuleScriptReview?> private var scriptReview = nil
     public init(model: BrowserModel, services: BrowserServices? = nil) {
@@ -42,12 +41,6 @@ public struct PreferencesView: View {
             Button("Cancel", role: .cancel) {}
             Button("Clear History", role: .destructive) { services?.clearHistory() }
         } message: { Text("All locally recorded visits will be removed. Your tabs, pins, and favorites are kept.") }
-        .alert("Clear website data in all Spaces?", isPresented: $clearDataConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear Website Data", role: .destructive) {
-                Task { await services?.clearSiteData() }
-            }
-        } message: { Text("Cookies, caches, and local storage will be removed for every Space. Websites may sign you out. This cannot be undone.") }
     }
 
     private func general(_ services: BrowserServices) -> some View {
@@ -99,15 +92,8 @@ public struct PreferencesView: View {
                     Spacer()
                     Button("Clear History…") { clearHistoryConfirmation = true }.disabled(services.history == nil)
                 }
-                HStack {
-                    Text("Cookies and website storage")
-                    Spacer()
-                    if services.privacyBusy { ProgressView().controlSize(.small) }
-                    Button("Clear Website Data…") { clearDataConfirmation = true }.disabled(services.privacyBusy)
-                }
-                Text("Open pages can create new site data after clearing. Close tabs before clearing if you need them to remain empty.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
+            SiteDataPreferences(services: services)
             Section("Your files") {
                 Text(services.directory.path).font(.caption.monospaced()).textSelection(.enabled)
                 Button("Reveal Cairn Data Folder") {
