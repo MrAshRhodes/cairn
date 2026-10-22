@@ -134,11 +134,11 @@ struct DownloadsView: View {
             }.overlay {
                 if services.downloads.items.isEmpty {
                     ContentUnavailableView("No direct-link downloads", systemImage: "arrow.down.circle",
-                        description: Text("Paste a public download link above. Your engine may use a separate save dialog for website downloads."))
+                        description: Text("Paste a public download link above. Downloads started from a page also appear here."))
                 }
             }
             HStack {
-                Text("This list tracks URL-only transfers without website sign-ins. WebKit's authenticated website downloads use a separate save dialog.")
+                Text("Downloads are requested again from their URL without your website sign-ins, so files that need you to be signed in may fail.")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 Button("Clear Finished") { services.downloads.clearFinished() }

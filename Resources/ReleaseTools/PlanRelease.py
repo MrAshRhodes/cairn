@@ -11,7 +11,8 @@ import subprocess
 PRODUCT_FILES = {
     "Package.swift", "Package.resolved", "Makefile",
     "scripts/swiftw", "scripts/bundle-app.sh", "scripts/make-dmg.sh",
-    "scripts/make-appcast.sh", "scripts/release.sh", "scripts/sparkle-release-signing.sh",
+    "scripts/make-appcast.sh", "scripts/release.sh", "scripts/finalize-release.sh",
+    "scripts/sparkle-release-signing.sh",
 }
 VERSION = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
 
@@ -28,7 +29,7 @@ def is_product(path):
         return True
     if path.startswith("Resources/"):
         return not path.startswith("Resources/ReleaseTools/") or Path(path).name in {
-            "Icon.swift", "appcast.py", "bundle.py", "validate-key.py", "VerifySignature.swift",
+            "Icon.swift", "appcast.py", "bundle.py", "validate-key.py", "VerifySignature.swift", "ReleaseAssets.py",
         }
     return (path.startswith("engine/") and
             not path.startswith(("engine/tests/", "engine/fixtures/", "engine/smoke/", "engine/.cache/", "engine/cef/")) and

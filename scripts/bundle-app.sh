@@ -7,22 +7,18 @@ export VERSION="${VERSION:-0.1.0}"
 export BUILD_NUMBER="${BUILD_NUMBER:-${VERSION}}"
 export SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 export SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
-export CAIRN_WITH_CHROMIUM="${CAIRN_WITH_CHROMIUM:-1}"
 case "$ARCH" in
-  arm64|x86_64) arches=("$ARCH") ;;
-  universal) arches=(arm64 x86_64) ;;
-  *) echo "ERROR: ARCH must be arm64, x86_64 or universal" >&2; exit 1 ;;
+  arm64|x86_64) ;;
+  universal)
+    echo "ERROR: Chromium packaging requires a single architecture: universal bundles are not supported. Build arm64 and x86_64 separately." >&2
+    exit 1 ;;
+  *) echo "ERROR: ARCH must be arm64 or x86_64" >&2; exit 1 ;;
 esac
 case "$CONFIGURATION" in debug|release) ;; *) echo "Invalid CONFIGURATION" >&2; exit 1 ;; esac
-case "$CAIRN_WITH_CHROMIUM" in
-  0) ;;
-  1)
-    [[ "$ARCH" != universal ]] || { echo "ERROR: Chromium packaging requires a single architecture" >&2; exit 1; }
-    [[ -f engine/bundle.py ]] || { echo "ERROR: Chromium bundler is not installed" >&2; exit 1; }
-    export CAIRN_CEF_ARCH="$ARCH"
-    ;;
-  *) echo "CAIRN_WITH_CHROMIUM must be 0 or 1" >&2; exit 1 ;;
-esac
+[[ -f engine/bundle.py && -f engine/entitlements/renderer.plist && -f engine/entitlements/helper.plist ]] || {
+  echo "ERROR: Chromium bundler or helper entitlements are missing" >&2; exit 1;
+}
+export CAIRN_CEF_ARCH="$ARCH"
 if [[ "$SIGNING_IDENTITY" != "-" && "$SIGNING_IDENTITY" != "Developer ID Application: "* ]]; then
   echo "ERROR: SIGNING_IDENTITY must be '-' or a Developer ID Application identity" >&2
   exit 1
@@ -35,22 +31,14 @@ rm -rf "$app"
 mkdir -p "$app/Contents/"{MacOS,Resources,Frameworks}
 # Validate configuration before compiling; plistlib escapes all substituted values.
 python3 Resources/ReleaseTools/bundle.py configure "$app"
-binaries=()
-for arch in "${arches[@]}"; do
-  build_args=(-c "$CONFIGURATION" --arch "$arch" --product Cairn
-    -Xlinker -rpath -Xlinker '@executable_path/../Frameworks')
-  scripts/swiftw build "${build_args[@]}"
-  bin="$(scripts/swiftw build "${build_args[@]}" --show-bin-path)"
-  binaries+=("$bin/Cairn")
-  if [[ "$CAIRN_WITH_CHROMIUM" == 1 ]]; then
-    scripts/swiftw build -c "$CONFIGURATION" --arch "$arch" --product CairnHelper
-  fi
-done
-if [[ ${#binaries[@]} -eq 1 ]]; then
-  ditto "${binaries[0]}" "$app/Contents/MacOS/Cairn"
-else
-  lipo -create "${binaries[@]}" -output "$app/Contents/MacOS/Cairn"
-fi
+# Fail before compiling unless the pinned CEF is prepared for exactly this architecture.
+python3 Resources/ReleaseTools/bundle.py engine "$ARCH"
+build_args=(-c "$CONFIGURATION" --arch "$ARCH" --product Cairn
+  -Xlinker -rpath -Xlinker '@executable_path/../Frameworks')
+scripts/swiftw build "${build_args[@]}"
+bin="$(scripts/swiftw build "${build_args[@]}" --show-bin-path)"
+scripts/swiftw build -c "$CONFIGURATION" --arch "$ARCH" --product CairnHelper
+ditto "$bin/Cairn" "$app/Contents/MacOS/Cairn"
 framework="$root/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/Sparkle.framework"
 [[ -d "$framework" ]] || { echo "ERROR: resolved Sparkle framework missing" >&2; exit 1; }
 ditto "$framework" "$app/Contents/Frameworks/Sparkle.framework"
@@ -61,12 +49,7 @@ swift Resources/ReleaseTools/Icon.swift "$work/Cairn.iconset"
 iconutil -c icns "$work/Cairn.iconset" -o "$app/Contents/Resources/Cairn.icns"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 ditto .build/artifacts/sparkle/Sparkle/LICENSE "$app/Contents/Resources/Sparkle-LICENSE"
-if [[ "$CAIRN_WITH_CHROMIUM" == 1 ]]; then
-  python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION" --arch "$ARCH" --helper "$bin/CairnHelper"
-  [[ -f engine/entitlements/renderer.plist && -f engine/entitlements/helper.plist ]] || {
-    echo "ERROR: Chromium helper entitlements missing" >&2; exit 1;
-  }
-fi
+python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION" --arch "$ARCH" --helper "$bin/CairnHelper"
 python3 Resources/ReleaseTools/bundle.py rpaths "$app"
 
 sign_args=(--force --sign "$SIGNING_IDENTITY")
@@ -81,14 +64,12 @@ fi
 sign_nested() {
   local target="$1"
   local metadata=("--preserve-metadata=identifier,entitlements")
-  if [[ "$CAIRN_WITH_CHROMIUM" == 1 ]]; then
-    case "$target" in
-      *"Cairn Helper (Renderer).app"*|*"Cairn Helper (GPU).app"*)
-        metadata=(--preserve-metadata=identifier --entitlements engine/entitlements/renderer.plist) ;;
-      *"Cairn Helper"*.app*)
-        metadata=(--preserve-metadata=identifier --entitlements engine/entitlements/helper.plist) ;;
-    esac
-  fi
+  case "$target" in
+    *"Cairn Helper (Renderer).app"*|*"Cairn Helper (GPU).app"*)
+      metadata=(--preserve-metadata=identifier --entitlements engine/entitlements/renderer.plist) ;;
+    *"Cairn Helper"*.app*)
+      metadata=(--preserve-metadata=identifier --entitlements engine/entitlements/helper.plist) ;;
+  esac
   codesign "${sign_args[@]}" "${metadata[@]}" "$target"
 }
 # Sign leaves before their containing bundles. Do not use codesign --deep to sign.

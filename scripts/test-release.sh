@@ -25,9 +25,13 @@ framework="$PWD/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64
 swiftc -parse-as-library Sources/CairnUpdater/Updater.swift Resources/ReleaseTools/UpdateTests.swift \
   -F "$framework" -framework Sparkle -Xlinker -rpath -Xlinker "$framework" -o "$work/update-tests"
 "$work/update-tests" "$work"
-python3 Resources/ReleaseTools/PackagingTests.py "$work"
+python3 Resources/ReleaseTools/PackagingTests.py
 python3 Resources/ReleaseTools/SigningTests.py
 python3 Resources/ReleaseTools/PlanReleaseTests.py
+python3 Resources/ReleaseTools/ChromiumGateTests.py
+python3 Resources/ReleaseTools/ReleaseAssetsTests.py
+# Real Sparkle signing and verification with a throwaway key and fake ad-hoc signed apps; nothing is released.
+python3 Resources/ReleaseTools/ReleasePipelineTests.py
 # RFC 8032 public key + signature for an empty message; private material is never needed.
 public_key="11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 signature="5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="
@@ -40,10 +44,12 @@ fi
 if SPARKLE_PUBLIC_ED_KEY=invalid scripts/bundle-app.sh > "$work/invalid-key.log" 2>&1; then
   echo "ERROR: invalid public key was accepted" >&2; exit 1
 fi
-if SPARKLE_PRIVATE_ED_KEY='' scripts/make-appcast.sh "$work/missing.zip" > "$work/missing-key.log" 2>&1; then
+if SPARKLE_PRIVATE_ED_KEY='' scripts/make-appcast.sh "$work/missing.xml" "$work/Cairn-0.0.0-arm64.zip" \
+  > "$work/missing-key.log" 2>&1; then
   echo "ERROR: unsigned appcast was accepted" >&2; exit 1
 fi
-if CAIRN_WITH_CHROMIUM=1 ARCH=universal scripts/bundle-app.sh > "$work/universal-cef.log" 2>&1; then
+grep -q 'set SPARKLE_KEYCHAIN_ACCOUNT or SPARKLE_PRIVATE_ED_KEY' "$work/missing-key.log"
+if ARCH=universal scripts/bundle-app.sh > "$work/universal-cef.log" 2>&1; then
   echo "ERROR: unsupported universal Chromium bundle was accepted" >&2; exit 1
 fi
 grep -q 'Chromium packaging requires a single architecture' "$work/universal-cef.log"

@@ -10,6 +10,10 @@ on:
         description: Plan and test without accessing signing secrets or publishing
         type: boolean
         default: true
+      chromium_risk_acknowledgement:
+        description: Written acknowledgement (one line, 20-500 characters) of the outstanding Chromium security gap and its validation; only needed while the gate blocks
+        type: string
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -50,11 +54,42 @@ jobs:
     needs: plan
     if: needs.plan.outputs.release == 'true'
     uses: ./.github/workflows/ci.yml
+  # Fails closed while the pinned Chromium trails Chrome stable, unless a maintainer acknowledges the gap in writing.
+  chromium-gate:
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.head }}
+      - name: Check the pinned Chromium for outstanding security gaps
+        env:
+          CHROMIUM_RISK_ACKNOWLEDGEMENT: ${{ inputs.chromium_risk_acknowledgement }}
+        run: python3 Resources/ReleaseTools/ChromiumGate.py --output chromium-gate/chromium-gate.json
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: chromium-gate
+          path: chromium-gate/chromium-gate.json
+          if-no-files-found: error
+          retention-days: 14
+  # Chromium (CEF) is the only engine and is single-architecture, so each architecture builds on its own runner.
   build:
-    needs: [plan, verify]
+    needs: [plan, verify, chromium-gate]
     if: needs.plan.outputs.release == 'true' && inputs.dry_run != true
-    runs-on: macos-15
-    timeout-minutes: 60
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
     # Configure this environment to require maintainer approval before secrets are released.
     environment: release
     steps:
@@ -62,12 +97,11 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ needs.plan.outputs.head }}
-      - name: Require explicitly provisioned update-signing material
+      - name: Require the explicitly provisioned update-signing public key
         env:
           PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
-          PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
         run: |
-          if [[ -z "$PUBLIC_KEY" || -z "$PRIVATE_KEY" ]]; then
+          if [[ -z "$PUBLIC_KEY" ]]; then
             echo "::error::Release signing is not provisioned. Configure the release environment explicitly; no unsigned release or new key will be generated."
             exit 1
           fi
@@ -83,14 +117,17 @@ jobs:
             echo 'Only stable vMAJOR.MINOR.PATCH releases are supported'; exit 1;
           }
           actionlint
-      - name: Build and authenticate release
+      - name: Prepare Chromium
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          python3 engine/tool.py fetch --arch "$ARCH"
+          python3 engine/tool.py build --arch "$ARCH"
+      - name: Build ${{ matrix.arch }} release
         env:
           RELEASE_TAG: ${{ needs.plan.outputs.tag }}
-          ARCH: universal
-          # CEF public releases are gated on security review and both-architecture packaging.
-          CAIRN_WITH_CHROMIUM: '0'
+          ARCH: ${{ matrix.arch }}
           SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
-          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
           APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
@@ -103,12 +140,66 @@ jobs:
           scripts/release.sh
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/release/Cairn-*-${{ matrix.arch }}.zip
+            dist/release/Cairn-*-${{ matrix.arch }}.dmg
+            dist/release/Cairn-*-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14
+  # The only job that holds the Sparkle private key: it signs both architectures into one update feed.
+  finalize:
+    needs: [plan, chromium-gate, build]
+    runs-on: macos-15
+    timeout-minutes: 30
+    # Configure this environment to require maintainer approval before the update-signing key is released.
+    environment: release
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.head }}
+      - name: Require explicitly provisioned update-signing material
+        env:
+          PUBLIC_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          if [[ -z "$PUBLIC_KEY" || -z "$PRIVATE_KEY" ]]; then
+            echo "::error::Release signing is not provisioned. Configure the release environment explicitly; no unsigned release or new key will be generated."
+            exit 1
+          fi
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: dist/release
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
+        with:
+          name: chromium-gate
+          path: chromium-gate
+      - name: Authenticate release
+        env:
+          RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+          CAIRN_CHROMIUM_GATE_RECORD: chromium-gate/chromium-gate.json
+          SPARKLE_PUBLIC_ED_KEY: ${{ vars.SPARKLE_PUBLIC_ED_KEY }}
+          SPARKLE_PRIVATE_ED_KEY: ${{ secrets.SPARKLE_PRIVATE_ED_KEY }}
+        run: |
+          export VERSION="${RELEASE_TAG#v}"
+          scripts/finalize-release.sh
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
           name: authenticated-release
-          path: dist/release/*
+          path: |
+            dist/release/*.zip
+            dist/release/*.dmg
+            dist/release/appcast.xml
+            dist/release/SHA256SUMS
+            dist/release/RELEASE-INFO.json
+            dist/release/RELEASE-NOTES.txt
           if-no-files-found: error
           retention-days: 14
   publish:
-    needs: [plan, build]
+    needs: [plan, finalize]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -126,8 +217,28 @@ jobs:
           RELEASE_COMMIT: ${{ needs.plan.outputs.head }}
           PREVIOUS_TAG: ${{ needs.plan.outputs.previous }}
         run: |
+          set -euo pipefail
           cd release
-          sha256sum --check SHA256SUMS
+          version="${RELEASE_TAG#v}"
+          # Exactly what the finalize job authenticated: both architectures, the shared feed and its metadata.
+          assets=("Cairn-$version-arm64.dmg" "Cairn-$version-arm64.zip" "Cairn-$version-x86_64.dmg"
+            "Cairn-$version-x86_64.zip" RELEASE-INFO.json SHA256SUMS appcast.xml)
+          # RELEASE-NOTES.txt becomes the release body rather than an uploaded asset.
+          expected="$(printf '%s\n' "${assets[@]}" RELEASE-NOTES.txt | LC_ALL=C sort)"
+          shopt -s dotglob nullglob
+          found=(*)
+          if [[ "$(printf '%s\n' "${found[@]}" | LC_ALL=C sort)" != "$expected" ]]; then
+            echo "::error::The authenticated release does not contain exactly the expected files."
+            exit 1
+          fi
+          for name in "${found[@]}"; do
+            [[ -f "$name" && ! -L "$name" ]] || { echo "::error::$name is not a regular file."; exit 1; }
+          done
+          if [[ "$(awk '{print $2}' SHA256SUMS | LC_ALL=C sort)" != "$(grep -Fxv SHA256SUMS <<< "$expected")" ]]; then
+            echo "::error::SHA256SUMS does not cover exactly the other published files."
+            exit 1
+          fi
+          sha256sum --check --strict SHA256SUMS
           current="$(gh api "repos/$GH_REPO/releases/latest" --jq .tag_name)"
           if [[ "$current" != "$PREVIOUS_TAG" ]]; then
             echo "::error::The latest release changed during this run. Re-plan instead of publishing stale assets."
@@ -145,5 +256,4 @@ jobs:
               -f ref="refs/tags/$RELEASE_TAG" -f sha="$RELEASE_COMMIT"
           fi
           gh release create "$RELEASE_TAG" --verify-tag \
-            --title "Cairn $RELEASE_TAG" --notes-file RELEASE-NOTES.txt \
-            ./*.zip ./*.dmg appcast.xml SHA256SUMS RELEASE-INFO.json
+            --title "Cairn $RELEASE_TAG" --notes-file RELEASE-NOTES.txt "${assets[@]}"

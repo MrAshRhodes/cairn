@@ -7,12 +7,17 @@ disabled, including any previously saved preference. Update checking contacts
 GitHub; automatic checking is **off by default**, opt-in in Settings. Installation
 uses Sparkle's native UI and consent flow.
 
-## v0.1.0 release path and status
+## Release path and status
 
-This guide is for maintainers preparing and publishing Cairn developer previews.
-The v0.1.0 publishing path is **local Keychain signing, followed by a separate,
-explicit upload of the finished release assets**. GitHub Actions signing is not
-configured: no private signing material has been uploaded to GitHub.
+This guide is for maintainers building, authenticating and publishing Cairn
+previews. Current source and future public releases are **Chromium-only**, with
+separate arm64 and x86_64 applications and one authenticated update feed. Build
+both architectures before finalizing a release; never replace a missing build
+with WebKit or publish a one-architecture stable feed.
+
+Local publication uses **Keychain signing followed by a separate, explicit upload**.
+GitHub Actions signing is not configured: no private signing material has been
+uploaded to GitHub.
 
 The published v0.1.0 artifact is **WebKit, universal arm64/x86_64, ad-hoc signed, and
 not notarized**. It is a developer preview, not a Gatekeeper-trusted distribution.
@@ -41,23 +46,31 @@ the checked-out commit with the latest published stable release:
   conventional `feat:` / `feat(scope):` bumps minor; `type!:` or a
   `BREAKING CHANGE:` / `BREAKING-CHANGE:` footer bumps major. Other changes bump
   patch. The largest applicable bump wins.
-- Run the reusable CI workflow on Apple Silicon and Intel, then build and
-  authenticate the **universal WebKit** preview. The derived version is embedded
-  in the app, archive names and appcast; no version-only commit is pushed.
+- Run the reusable CI workflow on Apple Silicon and Intel and check Chromium's
+  security status. Build a Chromium app per architecture, then finalize both
+  archives into one authenticated feed. The derived version is embedded in the
+  app, archive names and appcast; no version-only commit is pushed.
 - Verify transferred checksums, ensure the latest release has not changed, and
   publish a new release/tag targeting the tested commit, without overwriting
   existing artifacts. A failed
   build or signing check publishes nothing. An existing unpublished planned tag
   fails closed instead of overwriting it.
 
-This pipeline **does not publish Chromium**. Public Chromium distribution still
-requires the security review, both-architecture packaging/update strategy and
-real-device signing checks in the Chromium guide. Weekly scheduling does not
-close an upstream security gap.
+This pipeline publishes **only Chromium**. Public distribution still requires
+security review and real-device signing checks in the Chromium guide. Weekly
+scheduling does not close an upstream security gap. The release gate fails when
+CEF trails Chrome stable or upstream metadata cannot be checked; it never falls
+back to WebKit.
 
 In Actions, select **Release → Run workflow**, on the default branch, with
 `dry_run` enabled to inspect the next version and run CI without signing or
-publication. Disable it only for an intended authenticated release. Pushing an
+publication. Dry runs also run the security gate. To accept a confirmed gap,
+a maintainer must supply a reviewed, written rationale in the manual
+`chromium_risk_acknowledgement` input (20–500 printable characters, one line).
+The rationale is recorded with the gate result and release metadata; it cannot
+override unavailable or invalid upstream metadata. Scheduled and tag-triggered
+runs have no acknowledgement and remain blocked by a gap.
+Disable `dry_run` only for an intended authenticated release. Pushing an
 explicit stable `vMAJOR.MINOR.PATCH` tag also runs the same pipeline; the tag must
 identify the checked-out commit and be newer than the current release.
 
@@ -71,8 +84,9 @@ key: installed clients trust the existing public key. Until provisioning is
 approved, scheduled product releases stop with an explicit error; local
 Keychain-native signing remains available.
 
-The Homebrew tap independently checks published releases and updates its cask
-only after verifying the release artifacts. The product site deploys from `site/` using the Product site
+The external Homebrew tap must support the new per-architecture archive names
+and checksums before the next release; its existing universal v0.1.0 cask is not
+updated by changes in this repository. The product site deploys from `site/` using the Product site
 workflow; site-only changes never create a browser release.
 
 ## Local development (no Apple account)
@@ -83,25 +97,21 @@ Chromium packaging also requires CMake 3.21+ and Python 3.12+ (or a Python with
 CLT-only installations.
 
 ```sh
+make cef
 scripts/swiftw test
 scripts/test-release.sh
-make cef
 scripts/bundle-app.sh
 scripts/make-dmg.sh
 open dist/Cairn.app
 ```
 
-`scripts/bundle-app.sh` packages the experimental Chromium variant by default
-(`CAIRN_WITH_CHROMIUM=1`) for a single architecture, the host's unless `ARCH` is set.
-It never downloads CEF: run `make cef` first. A missing or stale engine fails the
-build; there is no WebKit fallback. `make app`, `make run` and `make dmg` prepare
-CEF and bundle in one step. For WebKit packaging, including Intel-on-Apple-Silicon
-or universal binaries, set `CAIRN_WITH_CHROMIUM=0` explicitly (for example
-`CAIRN_WITH_CHROMIUM=0 ARCH=universal scripts/bundle-app.sh`); `make webkit-app`
-is the host-architecture shortcut. `scripts/release.sh` and the release workflow
-keep `CAIRN_WITH_CHROMIUM=0`. Use `CONFIGURATION=debug` for a debug build.
-Universal WebKit packaging builds each slice independently, then combines the
-executable with `lipo`.
+`scripts/bundle-app.sh` packages Chromium for a single architecture, the host's
+unless `ARCH=arm64` or `ARCH=x86_64` is set. It never downloads CEF: run `make cef`
+first. A missing or stale engine fails packaging; there is no WebKit fallback.
+`make app`, `make run` and `make dmg` prepare CEF and bundle in one step.
+Universal packaging and the old WebKit build targets are removed. Setting
+`CAIRN_WITH_CHROMIUM=0` is an error, not an alternate build mode.
+Use `CONFIGURATION=debug` for a debug build.
 
 Without `SIGNING_IDENTITY`, everything is explicitly **ad-hoc signed**, not Developer
 ID signed, not notarized, and not trusted by Gatekeeper for public distribution.
@@ -109,10 +119,10 @@ Do not tell users to disable Gatekeeper globally. The script verifies nested cod
 signatures, architecture, Sparkle linkage, and the app-relative framework rpath.
 Sparkle symlinks and executable bits are preserved with `ditto`; nested Mach-O files,
 XPC services, helper apps, and frameworks are signed inside-out, not with `--deep`.
-The non-sandboxed WebKit host has only camera/microphone usage entitlements; it does
-not enable JIT, disable library validation, or add sandbox bypasses.
-The transport-security exception applies only to browser web content, so users can
-visit HTTP pages; Sparkle's update transport remains HTTPS-only.
+The main app retains minimal camera/microphone usage entitlements; renderer and
+GPU helpers receive the CEF JIT entitlement. Library validation is not disabled.
+Chromium handles web networking itself; the former WebKit-only transport-security
+exception is removed. Sparkle's update transport remains HTTPS-only.
 
 ## Update trust and public key
 
@@ -146,10 +156,12 @@ or invalid configuration fails closed. Keep the key stable: losing it means thes
 clients cannot authenticate another ZIP; arrange a separately authenticated manual
 reinstallation instead of weakening the validation policy.
 
-## Prepare v0.1.0 using the local Keychain
+## Prepare the next release locally
 
-Run these commands from the integrated repository checkout. Resolve Sparkle's tools
-with `scripts/swiftw build --product Cairn` if they are not already available.
+Use the same reviewed commit and an unused version newer than the published
+release on both builders. Examples use `0.1.1`; substitute the approved version
+consistently. Run commands from the repository root. Resolve Sparkle's tools with
+`scripts/swiftw package resolve`; this does not require CEF or build an app.
 
 ### One-time key provisioning
 
@@ -167,13 +179,52 @@ generate a replacement on another machine and publish it under the same version*
 If the original item is unavailable, stop and recover it securely. Do not use the
 tool's private-key export option or copy private material into shell history.
 
-### Build and authenticate the local preview
+### Build each architecture
 
-Use **Keychain-native signing** for local publication. Set the account name and the
-known public key; do not export private material from Keychain. The release script
-calls the official `sign_update --account` tool for the archive and feed, and uses
-the same account for feed verification. Neither `generate_keys -p` nor a raw Keychain
-password lookup is needed during a release.
+The build stage needs the **public** Sparkle key, not the private signing key or
+Keychain account. On an Apple Silicon builder, prepare CEF and build arm64:
+
+```bash
+(
+  set +x
+  set -euo pipefail
+  unset SPARKLE_PRIVATE_ED_KEY SPARKLE_KEYCHAIN_ACCOUNT
+  export SPARKLE_PUBLIC_ED_KEY='ugn8YkRCxDuzUN63cb+sFMayO6As26BL/1FBbbUs9a8='
+  # Explicit development-only signing; use the Developer ID recipe below instead
+  # when producing a hardened, notarized distribution.
+  unset APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
+  unset APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD NOTARY_KEYCHAIN_PROFILE SIGNING_KEYCHAIN
+  python3 engine/tool.py fetch --arch arm64
+  python3 engine/tool.py build --arch arm64
+  SIGNING_IDENTITY=- VERSION=0.1.1 BUILD_NUMBER=0.1.1 ARCH=arm64 scripts/release.sh
+)
+```
+
+Repeat on an Intel builder, replacing `arm64` with `x86_64`. Use the same version,
+build number, source commit, public key and signing mode. Each invocation writes
+`Cairn-0.1.1-ARCH.zip`, `.dmg` and `.json` into `dist/release`; the JSON records
+checksums and build provenance. It does not authenticate a feed or publish.
+Copy both builders' three files into one clean release directory. Do not mix
+versions or retain unrelated files there.
+
+### Check the engine and authenticate both builds
+
+On the finalization Mac, generate a gate record outside the release directory:
+
+```sh
+python3 Resources/ReleaseTools/ChromiumGate.py --output dist/chromium-gate.json
+```
+
+A confirmed gap blocks this command by default. Review the upstream changes and
+validation evidence first. If accepting the known gap, supply your own written
+rationale through `CHROMIUM_RISK_ACKNOWLEDGEMENT` (20–500 printable characters,
+one line), then rerun the command. Do not use a placeholder acknowledgement.
+Unavailable or invalid upstream metadata always blocks release, even with an
+acknowledgement. Merge and validate a newer stable CEF pin when one is available;
+never promote beta merely to bypass the gap.
+
+Use **Keychain-native signing** to finalize. Neither `generate_keys -p` nor a raw
+Keychain password lookup is needed:
 
 ```bash
 (
@@ -182,24 +233,18 @@ password lookup is needed during a release.
   unset SPARKLE_PRIVATE_ED_KEY
   export SPARKLE_KEYCHAIN_ACCOUNT=io.github.mrashrhodes.cairn
   export SPARKLE_PUBLIC_ED_KEY='ugn8YkRCxDuzUN63cb+sFMayO6As26BL/1FBbbUs9a8='
-
-  # Explicitly select the ad-hoc, non-notarized WebKit developer-preview path.
-  unset APPLE_CERTIFICATE_P12_BASE64 APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY
-  unset APPLE_ID APPLE_TEAM_ID APPLE_APP_PASSWORD NOTARY_KEYCHAIN_PROFILE SIGNING_KEYCHAIN
-  CAIRN_WITH_CHROMIUM=0 SIGNING_IDENTITY=- \
-    VERSION=0.1.0 BUILD_NUMBER=0.1.0 ARCH=universal scripts/release.sh
-
+  export CAIRN_CHROMIUM_GATE_RECORD="$PWD/dist/chromium-gate.json"
+  scripts/finalize-release.sh dist/release
   scripts/sparkle-release-signing.sh verify-feed dist/release/appcast.xml
   swift Resources/ReleaseTools/VerifySignature.swift --feed \
     "$SPARKLE_PUBLIC_ED_KEY" dist/release/appcast.xml
 )
 ```
 
-Before tests or compilation, the script signs an empty, nonsecret probe and verifies
-its signature against `SPARKLE_PUBLIC_ED_KEY` with CryptoKit. A missing/denied Keychain
-item, a signer failure, or a mismatched public key stops the release before building.
-If the resolved Sparkle tools are absent, dependency resolution runs first; it does
-not build or sign an app. The probe is removed afterward.
+Finalization checks the per-architecture metadata and checksums, requires a gate
+record matching the built Chromium, and signs a nonsecret probe to verify that
+the signer matches the public key. A missing/denied Keychain item, signer failure
+or mismatched public key stops finalization. The probe is removed afterward.
 
 macOS may still ask for permission for the official Sparkle signer to access its
 Keychain item. Allow access only to the expected signer. If access is blocked, unlock
@@ -210,14 +255,14 @@ unsigned output, or raw password extraction.
 Do not use `echo`, `tee`, shell tracing, an argument such as `--body`, or a file
 redirect to expose or persist private material. Do not add a `gh secret set` step.
 
-The release script runs tests, builds, creates a ZIP and DMG, and signs the ZIP and
-appcast with Sparkle 2.10's resolved `sign_update` tool. In Keychain-native mode, only
-the official signer accesses the private item; the shell never receives it. CryptoKit verifies
-the actual ZIP and feed signatures against the public key embedded in the app,
-rejecting mismatched key pairs; Sparkle also verifies the signed feed. These are
-real-key checks, not the public test-vector checks in the tooling test suite.
-No deltas or remote release-note content are emitted. The archive's Info.plist must
-match the supplied app.
+The finalizer signs both ZIPs and the shared appcast with Sparkle 2.10's resolved
+`sign_update` tool. In Keychain-native mode, only the official signer accesses the
+private item; the shell never receives it. Each archived app is extracted and
+verified before signing; its metadata determines the feed entries. CryptoKit
+verifies ZIP and feed signatures against the public key embedded in both apps;
+Sparkle also verifies the signed feed. No deltas or remote release-note content
+are emitted. The two apps must agree on version, build, bundle ID, minimum macOS,
+public key and signing mode.
 
 For a signing-only access check without building an application, use the same public
 key/account environment and run `scripts/sparkle-release-signing.sh check-key`.
@@ -229,11 +274,13 @@ decision: set `SPARKLE_PRIVATE_ED_KEY` to Sparkle's canonical base64 secret and 
 through stdin. Setting both modes, or neither, is an error. The local publication path
 does not use the environment-key mode and does not upload private material to CI.
 
-Output: `dist/Cairn.app`, `dist/release/Cairn-0.1.0-universal.zip`,
-`dist/release/Cairn-0.1.0-universal.dmg`, `appcast.xml`, `SHA256SUMS`,
-`RELEASE-INFO.json`, and `RELEASE-NOTES.txt` in the release directory. The latter two
-state actual Apple signing and notarization status. Local preparation **does not
-upload or publish anything**. Do not modify the archives or appcast after signing.
+Final public assets are `Cairn-0.1.1-arm64.zip`, `Cairn-0.1.1-x86_64.zip`, both
+matching DMGs, `appcast.xml`, `SHA256SUMS` and `RELEASE-INFO.json`.
+`RELEASE-NOTES.txt` supplies the release description. Metadata and notes state the
+actual Apple signing/notarization status, engine versions and any accepted risk.
+The per-architecture JSON files and gate record are build inputs, not download
+assets. Local preparation **does not upload or publish anything**. Do not modify
+the archives or appcast after signing.
 
 ### Publish finished assets separately
 
@@ -244,19 +291,21 @@ generated notes and appends the GUI verification limitation to the public releas
 description without changing any checksummed file.
 
 After the maintainer has approved publication, ensure the reviewed release commit
-is already present on GitHub. Create the remote `v0.1.0` tag through `gh release`
+is already present on GitHub. Create the remote `v0.1.1` tag through `gh release`
 rather than separately pushing a tag, so this local publication path does not
 deliberately invoke the tag-push release workflow. Upload only the final public assets:
 
 ```sh
 release_commit="$(git rev-parse HEAD)"
-gh release create v0.1.0 --repo mrashrhodes/cairn --target "$release_commit" \
-  --title 'Cairn v0.1.0 — developer preview' \
+gh release create v0.1.1 --repo mrashrhodes/cairn --target "$release_commit" \
+  --title 'Cairn v0.1.1 — Chromium developer preview' \
   --notes "$(cat dist/release/RELEASE-NOTES.txt; printf '\nIntegrated GUI has not yet been manually verified.\n')" \
-  dist/release/Cairn-0.1.0-universal.zip \
-  dist/release/Cairn-0.1.0-universal.dmg \
+  dist/release/Cairn-0.1.1-arm64.zip \
+  dist/release/Cairn-0.1.1-arm64.dmg \
+  dist/release/Cairn-0.1.1-x86_64.zip \
+  dist/release/Cairn-0.1.1-x86_64.dmg \
   dist/release/appcast.xml dist/release/SHA256SUMS \
-  dist/release/RELEASE-INFO.json dist/release/RELEASE-NOTES.txt
+  dist/release/RELEASE-INFO.json
 ```
 
 Do not run a separate `git push` for the tag. Never overwrite or move the tag after
@@ -265,35 +314,53 @@ signing secret belongs in a release asset. The stable updater URL resolves GitHu
 release; a GitHub draft or prerelease alone does not make that URL available. The
 developer-preview label does not imply notarization or completed GUI verification.
 
-For individual packaging steps, while the required signing environment is available:
+For an individual appcast step, while the required signing environment is
+available, pass the output feed first and both prepared archives afterward:
 
 ```sh
-CAIRN_WITH_CHROMIUM=0 VERSION=0.1.0 BUILD_NUMBER=0.1.0 ARCH=universal scripts/bundle-app.sh
-ditto -c -k --sequesterRsrc --keepParent dist/Cairn.app dist/Cairn-0.1.0-universal.zip
-scripts/make-appcast.sh dist/Cairn-0.1.0-universal.zip dist/Cairn.app dist/appcast.xml
-scripts/make-dmg.sh dist/Cairn.app dist/Cairn-0.1.0-universal.dmg
+scripts/make-appcast.sh dist/appcast.xml \
+  dist/release/Cairn-0.1.1-arm64.zip \
+  dist/release/Cairn-0.1.1-x86_64.zip
 ```
+
+This lower-level command does not generate release metadata or checksums, or
+enforce the Chromium security gate. Use `scripts/finalize-release.sh` for a
+distributable release; do not replace a finalized feed without re-finalizing.
 
 `CFBundleVersion` must increase on every update; by default it matches the numeric
 release version. Never reissue the same tag/version with different bytes or a new key.
-Use universal releases for the stable feed so both supported architectures receive
-the same release. ARM-only feeds include Sparkle's `arm64` hardware requirement.
-Intel-only app/DMG builds are supported, but the appcast generator rejects them:
-Sparkle 2.10 has no Intel-only hardware requirement, so an Intel-only update could
-replace an ARM app with a Rosetta-dependent app. Use universal releases instead.
+
+### One feed, two architectures
+
+The stable feed must contain **both** same-version archives. The arm64 item comes
+first, with `<sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>`;
+the x86_64 item follows without a hardware requirement. Sparkle 2.10.0 retains the
+first eligible item when versions are equal. Native Intel rejects the arm64 item;
+Apple Silicon, including a client running under Rosetta, selects it. Do not reorder
+the items or invent an Intel-only hardware attribute. Re-verify these selection
+semantics when upgrading Sparkle.
+
+The historical universal v0.1.0 client already uses this Sparkle version and the
+same feed URL. It can migrate to the matching Chromium application without a new
+update key. Its legacy engine preference is ignored; website cookies and storage
+are not migrated from WebKit profiles. One-architecture feeds, mismatched versions,
+duplicate architectures and non-Chromium archives are rejected.
 
 ## Optional Developer ID and notarization
 
 This is a future opt-in path, not the v0.1.0 preview's signing status. With the
-Sparkle environment available inside the same non-tracing subshell and an
+public Sparkle key available inside a non-tracing subshell and an
 already-installed local identity, choose a new, unused version higher than the
 published preview:
 
 ```sh
 SIGNING_IDENTITY='Developer ID Application: Your Name (TEAMID)' \
 NOTARY_KEYCHAIN_PROFILE='cairn-notary' \
-VERSION=0.1.1 ARCH=universal scripts/release.sh
+VERSION=0.1.1 ARCH=arm64 scripts/release.sh
 ```
+
+Repeat for x86_64 on an Intel builder with the same version, identity and signing
+mode, then finalize both sets of assets. Prepare CEF on each builder first.
 
 Provision the profile yourself with Apple's `notarytool`; Xcode/notarytool must be
 available. Without a notary profile/credentials the release is **not notarized** even
@@ -315,11 +382,11 @@ short-lived development artifacts, not releases. This is a functional Chromium
 check, **not** a Developer ID, notarization, hardened-runtime or CEF security-gap
 gate.
 
-**Automatic release signing/publication is not configured for v0.1.0.** Private
+**Automatic release signing/publication is not configured.** Private
 signing material has not been uploaded to GitHub and is not uploaded by the local
-publishing recipe. If a tag push starts the workflow without the protected `release`
-environment's `SPARKLE_PRIVATE_ED_KEY`, release preparation fails closed: the build
-job fails and its dependent publish job cannot publish. There is no secret-presence
+publishing recipe. The build matrix needs only the public Sparkle key; if the
+protected `release` environment lacks `SPARKLE_PRIVATE_ED_KEY`, finalization
+fails closed and the dependent publish job cannot publish. There is no secret-presence
 gate that skips the entire workflow. A checked-in workflow is not evidence that its
 signing environment is ready.
 
@@ -327,14 +394,16 @@ The public key alone may be stored as the `SPARKLE_PUBLIC_ED_KEY` GitHub variabl
 It cannot sign a release or enable automatic publication.
 
 If the repository owner later explicitly chooses to enable CI signing, that is a
-separate user-owned provisioning decision. The workflow accepts stable
-`vMAJOR.MINOR.PATCH` tags and requires a protected `release` environment and tag rules
-with maintainer approval. Its inputs are:
+separate user-owned provisioning decision. The workflow supports scheduled and
+manually dispatched default-branch releases plus explicit stable
+`vMAJOR.MINOR.PATCH` tag pushes. It requires a protected `release` environment
+and tag rules with maintainer approval. Environment approvals apply separately
+to the build and finalization jobs. Its signing configuration is:
 
 | Name | Location | Requirement |
 | --- | --- | --- |
 | `SPARKLE_PUBLIC_ED_KEY` | environment/repository variable | Required public key |
-| `SPARKLE_PRIVATE_ED_KEY` | environment secret | Required; official Sparkle exported key text |
+| `SPARKLE_PRIVATE_ED_KEY` | environment secret | Required for finalization only; official Sparkle exported key text |
 | `APPLE_CERTIFICATE_P12_BASE64` | environment secret | Optional existing Developer ID certificate, base64 |
 | `APPLE_CERTIFICATE_PASSWORD` | environment secret | Required when importing that certificate |
 | `APPLE_SIGNING_IDENTITY` | environment secret | Full Developer ID Application identity for that certificate |
@@ -345,20 +414,24 @@ Ed25519-authenticated but **ad-hoc and not notarized** release. Missing keys nev
 produce an unsigned fallback. Appcast consumers need no GitHub account.
 
 Actions are pinned to reviewed full commit SHAs; checkout does not persist credentials.
-The build job has only `contents: read`; the separate publish job has `contents: write`
-and no signing secrets. When enabled and supplied with authenticated build artifacts,
-it verifies checksums and publishes the versioned ZIP, DMG, appcast, and checksums to
-the tag's GitHub release. Update action pins deliberately.
-Manual dispatch must select an existing release tag; dispatch from a branch does nothing.
-The architecture input defaults to `universal`. Do not mix older manually published
-versions into GitHub's `latest` release or overwrite release assets.
+After planning, CI and the Chromium gate must pass before the fixed build matrix
+runs: arm64 on `macos-15`, x86_64 on `macos-15-intel`. There is no architecture
+selector or universal build. The finalizer combines `release-arm64`,
+`release-x86_64` and `chromium-gate` artifacts into `authenticated-release`.
+Only finalization receives the Sparkle private key.
+
+Build and finalization have `contents: read`; the separate publish job has
+`contents: write` and no signing secrets. It verifies checksums and publishes
+both ZIPs, both DMGs, the shared appcast, checksums and `RELEASE-INFO.json`.
+`RELEASE-NOTES.txt` becomes the release body, not a download asset.
+Update action pins deliberately. Do not mix older manually published versions
+into GitHub's `latest` release or overwrite release assets.
 
 ## Chromium assembly
 
-`scripts/bundle-app.sh` packages Chromium by default; local `make build`, `make app`,
-`make run` and `make dmg` also fetch, verify and build CEF for the host architecture
-first. The bundler itself never downloads CEF. `scripts/release.sh` and the release
-workflow keep `CAIRN_WITH_CHROMIUM=0`, so published releases do not include Chromium.
+All builds, including public releases, package Chromium. Local `make build`,
+`make test`, `make app`, `make run` and `make dmg` fetch, verify and build CEF for
+the host architecture first. The bundler itself never downloads CEF.
 Prepare the engine for the architecture being packaged:
 
 ```sh
@@ -371,7 +444,7 @@ python3 engine/tool.py build --arch arm64
 ARCH=arm64 scripts/bundle-app.sh
 ```
 
-The script sets `CAIRN_CEF_ARCH` from `ARCH` for the gated SwiftPM manifest and calls
+The script sets `CAIRN_CEF_ARCH` from `ARCH` for the SwiftPM manifest and calls
 `python3 engine/bundle.py --app APP --configuration release --arch ARCH`
 after the native executable is built, before signing. Fetch and build the matching
 engine architecture first (including its required pin markers), following
@@ -384,18 +457,24 @@ The CEF bundler currently requires a single architecture and rejects universal.
 Ad-hoc development signing is intentionally not hardened; a hardened CEF distribution
 requires all nested code to use the same Developer ID identity. Library validation is
 never disabled to conceal mismatched Team IDs.
-Chromium has its own security/update cadence; `scripts/release.sh` and the release
-workflow intentionally build WebKit (`CAIRN_WITH_CHROMIUM=0`) until the engine is
-release-ready.
+Chromium has its own security/update cadence. Passing packaging checks does not
+satisfy the release-security gate; review the [maintenance guide](UPDATING_CHROMIUM.md)
+and the recorded gate result before distribution.
 
 ## Validation boundaries
 
-`scripts/test-release.sh` exercises the real updater's fail-closed configuration,
-validates a public RFC 8032 signature and rejects tampering without generating private
-keys. Signing-mode regression tests use an isolated fake external signer and real
-CryptoKit public-signature verification; they never access the user's Keychain or sign
-a live app. They cover both modes, ambiguous/missing credentials, inaccessible keys,
-key mismatches before building, and suppressed signer diagnostics.
+`scripts/test-release.sh` exercises the updater's fail-closed configuration and
+rejects signature tampering. Signing-mode tests use public RFC 8032 fixtures and
+an isolated fake signer. Release-pipeline tests generate two throwaway Ed25519
+key pairs in memory and exercise Sparkle's real `sign_update` against synthetic,
+ad-hoc-signed app archives, including mismatched-key rejection and independent
+archive/feed verification. They never use the release key or the user's Keychain.
+Test private keys pass through child-process environments and signer stdin, not
+command-line arguments or files; they remain visible to the same user while the
+child runs. Temporary public fixtures are removed afterward. These checks cover
+both signing modes, ambiguous/missing credentials, inaccessible keys, key
+mismatches and suppressed signer diagnostics.
+
 A real local ad-hoc app/DMG and linkage can be verified without Apple credentials.
 End-to-end update installation requires a real key, two increasing app versions and an
 accessible feed; Apple signing/notarization requires your account. Test those before

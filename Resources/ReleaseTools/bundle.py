@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Materialize and validate Cairn's native application bundle."""
+"""Materialize and validate Cairn's native application bundle (Chromium is the only engine)."""
 import base64
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -8,17 +9,55 @@ import re
 import subprocess
 import sys
 
+ROOT = Path(__file__).resolve().parents[2]
+ARCHITECTURES = ("arm64", "x86_64")
+FRAMEWORK = "Chromium Embedded Framework.framework"
+HELPER_SUFFIXES = ("", " (Alerts)", " (GPU)", " (Plugin)", " (Renderer)")
+
 
 def require(condition, message):
     if not condition:
         raise SystemExit(f"ERROR: {message}")
 
 
-def configure(app):
-    version = os.environ["VERSION"]
-    build = os.environ["BUILD_NUMBER"]
-    for label, value in (("VERSION", version), ("BUILD_NUMBER", build)):
-        require(re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", value), f"{label} must be a numeric version")
+def check_engine_selection():
+    # The old WebKit/Chromium switch survives only as an accepted no-op spelling of "Chromium".
+    require(os.environ.get("CAIRN_WITH_CHROMIUM", "") in {"", "1"},
+            "WebKit builds were removed; Chromium is the only engine. Unset CAIRN_WITH_CHROMIUM (or set it to 1).")
+
+
+def check_architecture(arch):
+    require(arch != "universal",
+            "Chromium packaging requires a single architecture: universal bundles are not supported. "
+            "Build arm64 and x86_64 separately.")
+    require(arch in ARCHITECTURES, "ARCH must be arm64 or x86_64")
+    return arch
+
+
+def read_json(path):
+    try:
+        return json.loads(Path(path).read_text())
+    except (OSError, ValueError):
+        return None
+
+
+def check_engine(arch):
+    """Fail fast, before any compilation, unless the pinned CEF is prepared for exactly this arch."""
+    check_architecture(arch)
+    pin = ((read_json(ROOT / "engine/cef.lock.json") or {}).get("artifacts") or {}).get(arch)
+    cef = ROOT / "engine/cef" / arch
+    build = ROOT / "engine/.cache" / f"build-{arch}"
+    prepared = (pin is not None and read_json(cef / ".cairn-pin.json") == pin
+                and read_json(build / ".cairn-pin.json") == pin
+                and (cef / "Release" / FRAMEWORK / "Chromium Embedded Framework").is_file()
+                and (build / "libcef_dll_wrapper/libcef_dll_wrapper.a").is_file())
+    require(prepared, f"Chromium (CEF) is not prepared for {arch} or does not match engine/cef.lock.json. "
+            f"Run: python3 engine/tool.py fetch --arch {arch} && python3 engine/tool.py build --arch {arch} "
+            "(make cef prepares the host architecture). Nothing is downloaded implicitly.")
+    print(f"Chromium (CEF) is prepared for {arch}.")
+
+
+def check_public_key():
     key = os.environ.get("SPARKLE_PUBLIC_ED_KEY", "")
     if key:
         try:
@@ -27,7 +66,22 @@ def configure(app):
             raise SystemExit("ERROR: SPARKLE_PUBLIC_ED_KEY must be base64")
         require(len(decoded) == 32 and any(decoded) and base64.b64encode(decoded).decode() == key,
                 "SPARKLE_PUBLIC_ED_KEY must encode a nonzero 32-byte Ed25519 public key")
-    else:
+    return key
+
+
+def check_environment():
+    """Everything `configure` takes from the environment, so callers can fail before a long build."""
+    check_engine_selection()
+    arch = check_architecture(os.environ.get("ARCH", ""))
+    version, build = os.environ.get("VERSION", ""), os.environ.get("BUILD_NUMBER", "")
+    for label, value in (("VERSION", version), ("BUILD_NUMBER", build)):
+        require(re.fullmatch(r"[0-9]+(?:\.[0-9]+){0,2}", value), f"{label} must be a numeric version")
+    return arch, version, build, check_public_key()
+
+
+def configure(app):
+    arch, version, build, key = check_environment()
+    if not key:
         print("NOTICE: no public update key. Check for Updates will explain why updates are disabled.")
     with Path("Resources/Info.plist").open("rb") as stream:
         info = plistlib.load(stream)
@@ -36,11 +90,9 @@ def configure(app):
             info[name] = (value.replace("@CAIRN_VERSION@", version)
                           .replace("@CAIRN_BUILD_NUMBER@", build)
                           .replace("@SPARKLE_PUBLIC_ED_KEY@", key))
-    info["CairnBuildArchitecture"] = os.environ["ARCH"]
+    info["CairnBuildArchitecture"] = arch
     info["CairnSigningMode"] = "ad-hoc" if os.environ["SIGNING_IDENTITY"] == "-" else "developer-id"
-    chromium = os.environ.get("CAIRN_WITH_CHROMIUM", "1")
-    require(chromium in {"0", "1"}, "CAIRN_WITH_CHROMIUM must be 0 or 1")
-    info["CairnBrowserEngine"] = "chromium" if chromium == "1" else "webkit"
+    info["CairnBrowserEngine"] = "chromium"
     with (app / "Contents/Info.plist").open("wb") as stream:
         plistlib.dump(info, stream, sort_keys=False)
 
@@ -54,14 +106,17 @@ def portable_rpaths(app):
             subprocess.run(["install_name_tool", "-delete_rpath", path, str(executable)], check=True)
 
 
+def single_architecture(binary):
+    return subprocess.check_output(["lipo", "-archs", str(binary)], text=True).split()
+
+
 def verify(app):
     executable = app / "Contents/MacOS/Cairn"
     with (app / "Contents/Info.plist").open("rb") as stream:
         info = plistlib.load(stream)
-    wanted = info["CairnBuildArchitecture"]
-    architectures = subprocess.check_output(["lipo", "-archs", str(executable)], text=True).split()
-    require(set(architectures) == ({"arm64", "x86_64"} if wanted == "universal" else {wanted}),
-            "bundle architectures do not match ARCH")
+    require(info.get("CairnBrowserEngine") == "chromium", "bundle is not a Chromium build")
+    wanted = check_architecture(info.get("CairnBuildArchitecture", ""))
+    require(single_architecture(executable) == [wanted], "bundle architecture does not match ARCH")
     loads = subprocess.check_output(["otool", "-L", str(executable)], text=True)
     require("@rpath/Sparkle.framework/Versions/B/Sparkle" in loads, "Sparkle is not dynamically linked")
     commands = subprocess.check_output(["otool", "-l", str(executable)], text=True)
@@ -78,19 +133,30 @@ def verify(app):
     require((framework / "Versions/Current").is_symlink(), "Sparkle symlinks were not preserved")
     require((framework / "Sparkle").is_file(), "Sparkle runtime binary is missing")
     require((app / "Contents/Resources/Cairn.icns").is_file(), "app icon is missing")
-    if info["CairnBrowserEngine"] == "chromium":
-        cef = app / "Contents/Frameworks/Chromium Embedded Framework.framework"
-        require((cef / "Chromium Embedded Framework").is_file(), "Chromium runtime binary is missing")
-        for suffix in ["", " (Alerts)", " (GPU)", " (Plugin)", " (Renderer)"]:
-            name = "Cairn Helper" + suffix
-            helper = app / "Contents/Frameworks" / (name + ".app")
-            require((helper / "Contents/MacOS" / name).is_file(), f"{name} executable is missing")
-        for name in ["cef.lock.json", "CEF-LICENSE.txt"]:
-            require((app / "Contents/Resources" / name).is_file(), f"Chromium resource is missing: {name}")
+    cef = app / "Contents/Frameworks" / FRAMEWORK
+    require((cef / "Chromium Embedded Framework").is_file(), "Chromium runtime binary is missing")
+    require(single_architecture(cef / "Chromium Embedded Framework") == [wanted],
+            "Chromium runtime architecture does not match ARCH")
+    for suffix in HELPER_SUFFIXES:
+        name = "Cairn Helper" + suffix
+        helper = app / "Contents/Frameworks" / (name + ".app") / "Contents/MacOS" / name
+        require(helper.is_file(), f"{name} executable is missing")
+        require(single_architecture(helper) == [wanted], f"{name} architecture does not match ARCH")
+    for name in ["cef.lock.json", "CEF-LICENSE.txt"]:
+        require((app / "Contents/Resources" / name).is_file(), f"Chromium resource is missing: {name}")
     subprocess.run(["plutil", "-lint", str(app / "Contents/Info.plist")], check=True)
-    print(f"Verified {info['CairnBrowserEngine']} bundle, {wanted} executable, Sparkle linkage and relative rpath.")
+    print(f"Verified chromium bundle, {wanted} executable, Sparkle linkage and relative rpath.")
 
+
+COMMANDS = {"configure": configure, "rpaths": portable_rpaths, "verify": verify}
+USAGE = "use check | engine ARCH | configure|rpaths|verify APP"
 
 if __name__ == "__main__":
-    require(len(sys.argv) == 3 and sys.argv[1] in {"configure", "rpaths", "verify"}, "use configure|rpaths|verify APP")
-    {"configure": configure, "rpaths": portable_rpaths, "verify": verify}[sys.argv[1]](Path(sys.argv[2]))
+    arguments = sys.argv[1:]
+    if arguments == ["check"]:
+        check_environment()
+    elif len(arguments) == 2 and arguments[0] == "engine":
+        check_engine(arguments[1])
+    else:
+        require(len(arguments) == 2 and arguments[0] in COMMANDS, USAGE)
+        COMMANDS[arguments[0]](Path(arguments[1]))

@@ -88,11 +88,14 @@ class ReleasePlanningTests(unittest.TestCase):
 
     def test_dependency_and_packaging_changes_are_product_changes(self):
         for path in ("Package.resolved", "engine/cef.lock.json", "engine/bundle.py",
-                     "Resources/Info.plist", "scripts/bundle-app.sh",
+                     "Resources/Info.plist", "scripts/bundle-app.sh", "scripts/finalize-release.sh",
                      "Resources/ReleaseTools/bundle.py", "Resources/ReleaseTools/appcast.py",
-                     "Resources/ReleaseTools/validate-key.py"):
+                     "Resources/ReleaseTools/ReleaseAssets.py", "Resources/ReleaseTools/validate-key.py"):
             self.assertTrue(planner.is_product(path), path)
-        self.assertFalse(planner.is_product("Resources/ReleaseTools/PlanReleaseTests.py"))
+        for path in ("Resources/ReleaseTools/PlanReleaseTests.py", "Resources/ReleaseTools/ReleaseAssetsTests.py",
+                     "Resources/ReleaseTools/ReleasePipelineTests.py", "Resources/ReleaseTools/ChromiumGate.py",
+                     "Resources/ReleaseTools/ChromiumGateTests.py", "Resources/ReleaseTools/EphemeralKey.swift"):
+            self.assertFalse(planner.is_product(path), path)
 
 
 if __name__ == "__main__":

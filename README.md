@@ -37,7 +37,7 @@ which is separate from Apple Developer ID signing.
 
 Requires macOS 14 or later, Swift 6, and Apple's Command Line Tools or Xcode.
 The first build downloads Sparkle through Swift Package Manager. Local builds use
-**Chromium (CEF)** by default for the best website compatibility, so they also
+**Chromium (CEF)** exclusively for website compatibility, so they also
 require CMake 3.21+ and Python 3.12+ (or a Python version with
 `tarfile.data_filter`). Read the [CEF security status](docs/UPDATING_CHROMIUM.md)
 before preparing its substantial native dependency:
@@ -48,22 +48,18 @@ cd cairn
 make app    # or `make run` to build and open it
 ```
 
-`make build`, `make app` and `make run` prepare CEF automatically: the first run
-downloads and verifies the pinned archive (about 130 MB) and builds its wrapper for
-your Mac's architecture; later runs reuse the verified cache. The generated
-`dist/Cairn.app` bundles **Chromium and its matching helper processes**. Settings
-saved without an explicit engine choice, including those written by older
-WebKit-only builds, follow the bundled engine, so the app opens with Chromium.
-If you explicitly chose WebKit in Settings, that choice is kept; switch it back
-there and follow any restart instruction shown.
+`make build`, `make test`, `make app` and `make run` prepare CEF automatically:
+the first run downloads and verifies the pinned archive (about 130 MB) and builds
+its wrapper for your Mac's architecture; later runs reuse the verified cache.
+The generated `dist/Cairn.app` bundles **Chromium and its matching helper processes**.
+There is no engine selector or WebKit fallback. Older settings files remain
+readable, but their engine choice is ignored. Website cookies and storage from
+older WebKit builds are not migrated into Chromium profiles.
 
 CEF must run from a proper application bundle, so `make run` launches
-`dist/Cairn.app` rather than an unbundled `swift run`. `scripts/bundle-app.sh` also
-packages Chromium by default once `make cef` has prepared the engine. For the
-smaller, system-WebKit-only alternative, which needs no CEF, use `make webkit-app`,
-`make webkit-run` or `make webkit-build` (or `CAIRN_WITH_CHROMIUM=0
-scripts/bundle-app.sh`, required for universal packaging). `make test` runs the
-WebKit-based test suite and does not prepare CEF.
+`dist/Cairn.app` rather than an unbundled `swift run`. `scripts/bundle-app.sh`
+packages Chromium once `make cef` has prepared the engine. Build separately for
+Apple Silicon (`arm64`) and Intel (`x86_64`); universal builds are not supported.
 
 A development build is
 ad-hoc signed unless you configure your own Developer ID signing. Ad-hoc signing
@@ -75,10 +71,10 @@ downloads.
 The implementation includes native Spaces, vertical tabs,
 favorites and pins, session restoration and archiving, command search, split
 browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
-explicit trust decision. Authenticated WebKit downloads use a native save dialog
-and are separate from the URL-only download list.
+explicit trust decision. Downloads are delegated to Cairn's URL-based downloader;
+website cookies are not forwarded, so downloads requiring a website sign-in may fail.
 
-Automated tests cover the integrated services and real WebKit behavior. The
+Automated tests cover the integrated services and legacy settings compatibility. The
 bundled arm64 Chromium engine has also passed native rendering checks for CSS
 grid, container queries, `:has()`, JavaScript modules, network requests, responsive
 viewport resizing, and compositor output, alongside profile isolation and lifecycle
@@ -98,18 +94,19 @@ is explicitly provisioned; see the [release guide](docs/RELEASING.md#weekly-rele
 The build wrapper handles the Command Line Tools-only SwiftPM/Swift Testing
 configuration. It does not install or change your system toolchain.
 
-## Engines and security updates
+## Engine and security updates
 
-**Chromium Embedded Framework (CEF)** is the recommended engine for website
-compatibility and the default for local builds. It remains **experimental**: it
+**Chromium Embedded Framework (CEF)** is the only engine for source builds and
+future public releases. It remains **experimental**: it
 has separate dependency, helper-process, packaging and security requirements, and
 it is not updated by installing Google Chrome. Follow the [Chromium maintenance guide](docs/UPDATING_CHROMIUM.md);
 do not enable an old CEF build just because it compiles. A version-monitoring
 workflow cannot guarantee upstream fixes exist or ship them without a release.
 The current pin trails Chrome stable; public Chromium distribution remains gated.
 
-The published download and WebKit-only builds use **system WebKit**, updated by
-Apple through macOS/Safari updates. Keep macOS and its browser components current.
+The historical v0.1.0 download uses **system WebKit**, updated by Apple through
+macOS/Safari updates. This does not describe the current source or future releases.
+Keep macOS and its browser components current.
 
 Application auto-updates require signed Sparkle releases and the matching public
 key embedded in the installed application. An unconfigured source build must

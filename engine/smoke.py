@@ -43,7 +43,7 @@ def main():
     args = parser.parse_args()
     if args.development_ad_hoc:
         print("DEVELOPMENT ONLY: no Hardened Runtime. This is NOT a release-security validation. Chromium sandbox remains enabled.", flush=True)
-    env = dict(os.environ, CAIRN_WITH_CHROMIUM="1")
+    env = dict(os.environ)
     for product in ["CairnHelper", "CairnChromiumSmoke"]:
         subprocess.run([str(ROOT / "scripts/swiftw"), "build", "--product", product], cwd=ROOT, env=env, check=True)
     work = ROOT / "engine/.cache" / ("smoke-" + str(uuid.uuid4()))

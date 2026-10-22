@@ -9,13 +9,12 @@ import CairnBoosts
 
 @MainActor
 private final class TestEngine: BrowserEngine {
-    let kind: EngineKind
+    let kind = EngineKind.chromium
     let displayName = "Test engine"
     let versionDescription = "Test 1"
     var tabs: [TestTab] = []
     var clearedProfiles: [String] = []
     var stopped = false
-    init(kind: EngineKind = .webkit) { self.kind = kind }
     func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab {
         let tab = TestTab()
         tab.state.url = initialURL
@@ -56,69 +55,73 @@ private final class TestTab: EngineTab {
 
 @Suite(.serialized) @MainActor
 struct BrowserServicesTests {
-    @Test func freshChromiumBuildSelectsChromiumAndPreservesLaterEngineChoice() throws {
-        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let registry = EngineRegistry()
-        registry.register(.webkit) { TestEngine() }
-        registry.register(.chromium) { TestEngine(kind: .chromium) }
-        let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
-        #expect(services.settings.engineKind == .chromium)
-        #expect(services.model.engine.kind == .chromium)
-        services.settings.engineKind = .webkit
-        try services.flush()
-        services.shutdown()
-
-        let reopened = try BrowserServices.bootstrap(registry: registry, directory: directory)
-        defer { reopened.shutdown() }
-        #expect(reopened.settings.engineKind == .webkit)
-        #expect(reopened.model.engine.kind == .webkit)
-    }
-
-    @Test func webKitBuildReportsUnavailableSavedChromiumWithoutRewritingPreference() throws {
-        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("settings.json")
-        let saved = Settings()
-        saved.engineKind = .chromium
-        try saved.save(to: file)
-        let registry = EngineRegistry()
-        registry.register(.webkit) { TestEngine() }
-        let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
-        defer { services.shutdown() }
-        #expect(services.model.engine.kind == .webkit)
-        #expect(services.settings.engineKind == .chromium)
-        #expect(services.issues.contains { $0.title == "Engine unavailable" })
-        try services.flush()
-        let reloaded = try Settings.load(from: file)
-        #expect(reloaded.engineKind == .chromium)
-        #expect(reloaded.engineKindIsExplicit)
-    }
-
-    @Test func chromiumBuildReplacesImplicitWebKitDefaultFromOlderBuild() throws {
+    @Test(arguments: [
+        #""engineKind":"webkit","engineKindIsExplicit":true"#,
+        #""engineKind":"webkit","engineKindIsExplicit":false"#,
+        #""engineKind":"webkit""#,
+    ])
+    func legacyEngineSettingsBootstrapChromiumAndKeepOtherSettings(engineFields: String) throws {
         let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
         let legacy = """
-        {"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s","engineKind":"webkit",
-        "autoArchiveAfterHours":12,"restoreSessionOnLaunch":true,"sidebarWidth":300}
+        {"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s",\(engineFields),
+        "autoArchiveAfterHours":24,"restoreSessionOnLaunch":false,"sidebarWidth":300}
         """
         try Data(legacy.utf8).write(to: file)
         let registry = EngineRegistry()
-        registry.register(.webkit) { TestEngine() }
-        registry.register(.chromium) { TestEngine(kind: .chromium) }
+        registry.register(.chromium) { TestEngine() }
         let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
         defer { services.shutdown() }
-        #expect(services.settings.engineKind == .chromium)
-        #expect(!services.settings.engineKindIsExplicit)
         #expect(services.model.engine.kind == .chromium)
+        #expect(services.settingsWritable)
+        #expect(services.issues.isEmpty)
+        #expect(services.settings.searchTemplate == "https://duckduckgo.com/?q=%s")
+        #expect(services.settings.autoArchiveAfterHours == 24)
+        #expect(!services.settings.restoreSessionOnLaunch)
         #expect(services.settings.sidebarWidth == 300)
-        #expect(!services.issues.contains { $0.title == "Engine unavailable" })
+
+        services.settings.sidebarWidth = 320
+        try services.flush()
+        let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(saved["engineKind"] as? String == "chromium")
+        #expect(saved["engineKindIsExplicit"] == nil)
+        let reloaded = try Settings.load(from: file)
+        #expect(reloaded.sidebarWidth == 320)
+        #expect(reloaded.autoArchiveAfterHours == 24)
+        #expect(!reloaded.restoreSessionOnLaunch)
+    }
+
+    @Test func freshInstallBootstrapsChromium() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let registry = EngineRegistry()
+        registry.register(.chromium) { TestEngine() }
+        let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
+        defer { services.shutdown() }
+        #expect(services.model.engine.kind == .chromium)
+        #expect(services.issues.isEmpty)
+    }
+
+    @Test func bootstrapFailsClearlyWithoutChromiumAndLeavesSavedSettingsUntouched() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let saved = Data(#"{"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s","engineKind":"webkit","autoArchiveAfterHours":24,"restoreSessionOnLaunch":false,"sidebarWidth":300}"#.utf8)
+        try saved.write(to: file)
+        do {
+            _ = try BrowserServices.bootstrap(registry: EngineRegistry(), directory: directory)
+            Issue.record("Bootstrap must fail when Chromium is not registered.")
+        } catch {
+            #expect(error.localizedDescription.contains("Chromium"))
+            #expect(!error.localizedDescription.localizedCaseInsensitiveContains("webkit"))
+        }
+        #expect(try Data(contentsOf: file) == saved)
     }
 
     @Test func newTabAndEditAddressAreDistinct() {
@@ -258,7 +261,7 @@ struct BrowserServicesTests {
         try corrupt.write(to: settingsURL)
         try corrupt.write(to: workspaceURL)
         let registry = EngineRegistry()
-        registry.register(.webkit) { TestEngine() }
+        registry.register(.chromium) { TestEngine() }
         let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
         #expect(!services.workspaceWritable)
         #expect(!services.settingsWritable)
@@ -347,7 +350,7 @@ struct BrowserServicesTests {
         defer { try? FileManager.default.removeItem(at: directory) }
         let engine = TestEngine()
         let registry = EngineRegistry()
-        registry.register(.webkit) { engine }
+        registry.register(.chromium) { engine }
         let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
         defer { services.shutdown() }
         #expect(services.issues.isEmpty)
@@ -399,7 +402,7 @@ struct BrowserServicesTests {
         settings.restoreSessionOnLaunch = false
         try settings.save(to: directory.appendingPathComponent("settings.json"))
         let registry = EngineRegistry()
-        registry.register(.webkit) { TestEngine() }
+        registry.register(.chromium) { TestEngine() }
         let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
         defer { services.shutdown() }
         #expect(services.model.selectedSpace.id == space.id)

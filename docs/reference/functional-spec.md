@@ -11,14 +11,12 @@ backend or telemetry. Websites may still require their own authentication.
 Browsing state belongs to the local user. The app uses its own name, artwork,
 storage format and implementation.
 
-Cairn supports two engines. Chromium (CEF) is the recommended engine for website
-compatibility and the default for local `make` builds and `scripts/bundle-app.sh`;
-it is a separate, pinned build option with an independent security-update process
-and remains experimental until its public release gate is met. The macOS-provided
-WebKit is used by the published downloads and WebKit-only builds. Settings saved
-without an explicit engine choice follow the running build's default engine; an
-explicit choice is preserved. Never present one engine as another or silently fall
-back to a different engine.
+Cairn uses Chromium (CEF) exclusively, including future public releases. It has a
+pinned dependency and an independent security-update process, and remains
+experimental. Release validation must surface any gap against Chrome stable.
+There is no engine selector or fallback. Legacy engine preferences are ignored
+without discarding other settings; website data is not migrated from historical
+WebKit profiles. Publish separate Apple Silicon and Intel applications.
 
 ## Workspace behavior
 

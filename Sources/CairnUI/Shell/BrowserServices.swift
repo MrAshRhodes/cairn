@@ -36,7 +36,6 @@ public final class BrowserServices {
     public let modules: ModuleRegistry
     public let updater: UpdateController
     public let directory: URL
-    public let availableEngines: [EngineKind]
     public private(set) var history: HistoryStore?
     public private(set) var issues: [BrowserIssue] = []
     public private(set) var workspaceWritable = true
@@ -59,12 +58,10 @@ public final class BrowserServices {
 
     public init(model: BrowserModel, settings: Settings? = nil,
                 directory: URL = WorkspaceStore.defaultDirectory,
-                registry: ModuleRegistry? = nil,
-                availableEngines: [EngineKind]? = nil) {
+                registry: ModuleRegistry? = nil) {
         self.model = model
         self.settings = settings ?? Settings()
         self.directory = directory
-        self.availableEngines = availableEngines ?? EngineRegistry.shared.available
         modules = registry ?? ModuleRegistry()
         workspaceStore = WorkspaceStore(directory: directory)
         boosts = BoostStore(directory: directory.appendingPathComponent("Boosts", isDirectory: true))
@@ -75,7 +72,6 @@ public final class BrowserServices {
     public static func bootstrap(registry suppliedRegistry: EngineRegistry? = nil,
                                  directory: URL = WorkspaceStore.defaultDirectory) throws -> BrowserServices {
         let registry = suppliedRegistry ?? .shared
-        let defaultEngineKind: EngineKind = registry.available.contains(.chromium) ? .chromium : .webkit
         var initialIssues: [BrowserIssue] = []
         var directoryWritable = true
         do { try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true) }
@@ -87,29 +83,26 @@ public final class BrowserServices {
         let settings: Settings
         var settingsWritable = directoryWritable
         if FileManager.default.fileExists(atPath: settingsURL.path) {
-            do { settings = try Settings.load(from: settingsURL, defaultEngineKind: defaultEngineKind) }
+            do { settings = try Settings.load(from: settingsURL) }
             catch {
-                settings = Settings(engineKind: defaultEngineKind)
+                settings = Settings()
                 settingsWritable = false
                 initialIssues.append(.init(title: "Settings could not be read",
                     detail: "\(error.localizedDescription)\nThe original file is preserved. Settings will not be saved this session."))
             }
-        } else { settings = Settings(engineKind: defaultEngineKind) }
-        guard let engine = registry.make(settings.engineKind) ?? registry.make(.webkit) else {
+        } else { settings = Settings() }
+        guard let engine = registry.make(.chromium) else {
             throw NSError(domain: "Cairn", code: 1, userInfo: [
-                NSLocalizedDescriptionKey: "No browser engine is available. Reinstall a complete Cairn application."
+                NSLocalizedDescriptionKey: "Chromium, the browser engine Cairn runs on, is not available in this installation. Reinstall Cairn from a complete release."
             ])
         }
         let initialWorkspace = Workspace(spaces: [Space(name: "Home", icon: "house", colorHex: "#527B72", profileID: "default")])
         let service = BrowserServices(model: BrowserModel(engine: engine, workspace: initialWorkspace), settings: settings,
-                                      directory: directory, availableEngines: registry.available)
+                                      directory: directory)
         service.issues = initialIssues
         service.settingsWritable = settingsWritable
         service.workspaceWritable = directoryWritable
         service.boostsWritable = directoryWritable
-        if engine.kind != settings.engineKind {
-            service.report("Engine unavailable", detail: "The selected engine is not included in this build. Using \(engine.displayName) for this session; your preference is unchanged.")
-        }
         service.load()
         return service
     }

@@ -325,7 +325,7 @@ struct ModuleFixture {
 }
 
 @MainActor final class ModuleTestEngine: BrowserEngine {
-    let kind = EngineKind.webkit
+    let kind = EngineKind.chromium
     let displayName = "Fake"
     let versionDescription = "Test"
     var tabs: [ModuleTestTab] = []
