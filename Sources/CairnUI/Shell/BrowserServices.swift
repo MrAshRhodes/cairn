@@ -13,7 +13,7 @@ public struct BrowserIssue: Identifiable {
 }
 
 public enum BrowserSheet: String, Identifiable {
-    case preferences, downloads, boosts, archive, history, moduleTrust
+    case preferences, downloads, boosts, archive, history, moduleTrust, shortcuts
     public var id: String { rawValue }
 }
 
@@ -43,6 +43,15 @@ public final class BrowserServices {
     public private(set) var boostsWritable = true
     public var sheet: BrowserSheet?
     public var commandBarPresented = false
+    public var commandBarMode: CommandBarMode = .search
+    public internal(set) var shortcuts = ShortcutMap()
+    public internal(set) var shortcutsWritable = true
+    public private(set) var splitsWritable = true
+    public let siteSearch: SiteSearchStore
+    public let tabSwitcher = TabSwitcher()
+    @ObservationIgnored let splitStore: SplitStore
+    @ObservationIgnored let shortcutStore: ShortcutStore
+    @ObservationIgnored public var onShortcutsChanged: (() -> Void)?
     public var sidebarVisible = true
     public var addressFocusRequest = 0
     public var findPresented = false
@@ -64,6 +73,9 @@ public final class BrowserServices {
         self.directory = directory
         modules = registry ?? ModuleRegistry()
         workspaceStore = WorkspaceStore(directory: directory)
+        splitStore = SplitStore(directory: directory)
+        shortcutStore = ShortcutStore(directory: directory)
+        siteSearch = SiteSearchStore(directory: directory)
         boosts = BoostStore(directory: directory.appendingPathComponent("Boosts", isDirectory: true))
         downloads = DownloadsManager()
         updater = UpdateController()
@@ -125,6 +137,20 @@ public final class BrowserServices {
             workspaceWritable = false
             report("Session recovery required", detail: "\(error.localizedDescription)\nYour saved session is preserved. This session will not overwrite it. Reveal the data folder in Settings to recover the file.")
         }
+        let splits = splitStore.load()
+        model.restoreSplits(splits.groups)
+        if let error = splits.error {
+            splitsWritable = splits.quarantinedTo != nil
+            report("Split view layout could not be read", detail: "\(error.localizedDescription)\n"
+                + (splits.quarantinedTo.map { "The file was moved to \($0.lastPathComponent)." } ?? "The original file is preserved. Layouts will not be saved this session."))
+        }
+        splitStore.onError = { [weak self] error in self?.report("Split view layout could not be saved", error: error) }
+        model.onSplitsChange = { [weak self] in
+            guard let self, self.splitsWritable else { return }
+            self.splitStore.scheduleSave(self.model.splitGroups)
+        }
+        siteSearch.onError = { [weak self] title, detail in self?.report(title, detail: detail) }
+        siteSearch.load()
         do { history = try HistoryStore(url: directory.appendingPathComponent("history.sqlite")) }
         catch { report("History is unavailable", error: error) }
         do { try boosts.load() }
@@ -138,6 +164,7 @@ public final class BrowserServices {
         do { try modules.loadUserModules(from: directory.appendingPathComponent("Modules", isDirectory: true)) }
         catch { report("Some modules could not be loaded", error: error) }
         modules.activate(model: model)
+        loadShortcuts()
         model.onChange = { [weak self] in
             guard let self, self.workspaceWritable else { return }
             self.workspaceStore.scheduleSave(self.model.workspace)
@@ -161,7 +188,7 @@ public final class BrowserServices {
     }
 
     public func applySettings() {
-        model.searchTemplate = settings.searchTemplate
+        model.searchTemplate = siteSearch.defaultEngine?.template ?? settings.searchTemplate
         autoArchive()
     }
 
@@ -174,6 +201,7 @@ public final class BrowserServices {
 
     public func flush() throws {
         if workspaceWritable { try workspaceStore.saveNow(model.workspace) }
+        if splitsWritable { try splitStore.saveNow(model.splitGroups) }
         if settingsWritable { try settings.save(to: directory.appendingPathComponent("settings.json")) }
     }
 
@@ -299,17 +327,37 @@ public final class BrowserServices {
     }
 
     public func commands() -> [Command] {
-        let local: [Command] = [
-            .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", shortcut: "⌘T", perform: { [weak self] _ in self?.newTab() }),
-            .init(id: "ui.address", title: "Edit Address", symbol: "link", shortcut: "⌘L", perform: { [weak self] _ in self?.focusAddress() }),
-            .init(id: "ui.split", title: "Toggle Split View", symbol: "rectangle.split.2x1", shortcut: "⇧⌘D", perform: { [weak self] _ in self?.toggleSplit() }),
-            .init(id: "ui.settings", title: "Settings", symbol: "gearshape", shortcut: "⌘,", perform: { [weak self] _ in self?.sheet = .preferences }),
+        let localBase: [Command] = [
+            .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", perform: { [weak self] _ in self?.showCommandBar(mode: .newTab) }),
+            .init(id: "ui.new-blank-tab", title: "New Blank Tab", symbol: "plus.square", perform: { [weak self] _ in self?.newTab() }),
+            .init(id: "ui.address", title: "Edit Address", symbol: "link", perform: { [weak self] _ in self?.editAddress() }),
+            .init(id: "ui.split", title: "Toggle Split View", symbol: "rectangle.split.2x1", perform: { [weak self] _ in self?.toggleSplit() }),
+            .init(id: "ui.split-add-right", title: "Split: Add Pane on the Right", symbol: "rectangle.righthalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .right) }),
+            .init(id: "ui.split-add-left", title: "Split: Add Pane on the Left", symbol: "rectangle.lefthalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .left) }),
+            .init(id: "ui.split-add-top", title: "Split: Add Pane on Top", symbol: "rectangle.tophalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .top) }),
+            .init(id: "ui.split-add-bottom", title: "Split: Add Pane on the Bottom", symbol: "rectangle.bottomhalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .bottom) }),
+            .init(id: "ui.split-remove-pane", title: "Split: Remove Focused Pane", symbol: "rectangle.badge.minus", perform: { [weak self] _ in self?.perform(action: "ui.split-remove-pane") }),
+            .init(id: "ui.split-separate", title: "Split: Separate All Panes", symbol: "rectangle.split.1x2", perform: { [weak self] _ in self?.model.closeSplit() }),
+            .init(id: "ui.reopen-closed-tab", title: "Reopen Closed Tab", symbol: "arrow.uturn.backward", perform: { [weak self] _ in self?.perform(action: "ui.reopen-closed-tab") }),
+            .init(id: "ui.clear-today", title: "Clear Today's Tabs", symbol: "trash", perform: { [weak self] _ in self?.perform(action: "ui.clear-today") }),
+            .init(id: "ui.copy-url", title: "Copy Current URL", symbol: "doc.on.doc", perform: { [weak self] _ in self?.copyCurrentURL() }),
+            .init(id: "ui.copy-markdown-link", title: "Copy Page Link as Markdown", symbol: "text.quote", perform: { [weak self] _ in self?.copyMarkdownLink() }),
+            .init(id: "ui.sidebar", title: "Toggle Sidebar", symbol: "sidebar.left", perform: { [weak self] _ in self?.sidebarVisible.toggle() }),
+            .init(id: "ui.next-space", title: "Select Next Space", symbol: "chevron.right.square", perform: { [weak self] _ in self?.stepSpace(1) }),
+            .init(id: "ui.previous-space", title: "Select Previous Space", symbol: "chevron.left.square", perform: { [weak self] _ in self?.stepSpace(-1) }),
+            .init(id: "ui.shortcuts", title: "Keyboard Shortcuts", symbol: "keyboard", perform: { [weak self] _ in self?.sheet = .shortcuts }),
+            .init(id: "ui.settings", title: "Settings", symbol: "gearshape", perform: { [weak self] _ in self?.sheet = .preferences }),
             .init(id: "ui.boosts", title: "Edit Boosts", symbol: "paintbrush", perform: { [weak self] _ in self?.sheet = .boosts }),
             .init(id: "ui.downloads", title: "Downloads", symbol: "arrow.down.circle", perform: { [weak self] _ in self?.sheet = .downloads }),
             .init(id: "ui.archive", title: "Archived Tabs", symbol: "archivebox", perform: { [weak self] _ in self?.sheet = .archive }),
             .init(id: "ui.history", title: "History", symbol: "clock", perform: { [weak self] _ in self?.sheet = .history }),
-            .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", shortcut: "⌘F", perform: { [weak self] _ in self?.findPresented = true }),
+            .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", perform: { [weak self] _ in self?.findPresented = true }),
         ]
+        let local = localBase.map { command -> Command in
+            var shown = command
+            shown.shortcut = shortcuts.chord(for: command.id)?.display
+            return shown
+        }
         let localTitles = Set(local.map { $0.title.lowercased() })
         let moduleCommands = modules.allCommands(for: model).filter { !localTitles.contains($0.title.lowercased()) }
         return local + moduleCommands.map { command in

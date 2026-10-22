@@ -26,6 +26,9 @@ public struct PreferencesView: View {
                     privacy(services).tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
                     updates(services).tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }.tag("updates")
                     modules(services).tabItem { Label("Modules", systemImage: "puzzlepiece.extension") }.tag("modules")
+                    SiteSearchPane(services: services).tabItem { Label("Site Search", systemImage: "magnifyingglass") }.tag("site-search")
+                    Button("Edit Keyboard Shortcuts…") { services.sheet = .shortcuts }
+                        .tabItem { Label("Shortcuts", systemImage: "keyboard") }.tag("shortcuts")
                 }.padding(.horizontal, 18).padding(.bottom, 18)
             } else {
                 ContentUnavailableView("Settings require an app session", systemImage: "gearshape",
