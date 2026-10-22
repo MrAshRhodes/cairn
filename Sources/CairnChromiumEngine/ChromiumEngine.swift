@@ -15,6 +15,11 @@ public enum ChromiumEngineModule {
         registry.register(.chromium) { ChromiumEngine() }
     }
 
+    /// Test harnesses only: crashes the tab's renderer process to exercise crash recovery.
+    @MainActor public static func crashRendererForTesting(_ tab: EngineTab) {
+        (tab as? ChromiumTab)?.bridge.crashRendererForTesting()
+    }
+
     /// Invoke only after the app delegate's save/discard checks have approved quitting.
     @MainActor public static func prepareForTermination(completion: @escaping @MainActor () -> Void) {
         CCChromiumRuntime.shutdown {
@@ -37,8 +42,13 @@ public final class ChromiumEngine: BrowserEngine {
         let support = dataRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Cairn/Chromium")
         do {
-            try CCChromiumRuntime.start(withRoot: support.path)
+            try CCChromiumRuntime.start(withRoot: EngineStorageRoot.resolve(support).path)
         } catch {
+            if (error as NSError).domain == "org.cairn.Chromium.Startup",
+               case .alreadyRunning(let code) = EngineStartupOutcome(exitCode: (error as NSError).code) {
+                // Another Cairn owns this profile and has been told to show itself; nothing is left to do here.
+                exit(code)
+            }
             initializationError = error
         }
     }

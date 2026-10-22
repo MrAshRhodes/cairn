@@ -155,6 +155,39 @@ requests cannot bypass checks or start duplicate teardown. Every app build insta
 this hook. Explicit tab/app close currently forces close (beforeunload cancellation
 is not supported).
 
+Quitting is bounded. If browsers have not all closed (or a browser creation is still
+pending) 4 s after the hook starts, the bridge drops its counters and calls `CefShutdown`
+anyway; a watchdog on a background queue exits the process after 10 s if `CefShutdown`
+itself blocks, and the application coordinator replies to AppKit after 12 s regardless.
+A browser whose creation is not confirmed within 20 s is abandoned and the tab reports an error.
+
+## Tab health and recovery
+
+The bridge reports process-level problems through the optional `EngineTabHealthEvents`
+protocol (`Sources/CairnEngineKit/EngineTabEvents+Health.swift`): a crashed, killed or
+out-of-memory renderer, an unresponsive renderer (terminated after 10 s if it does not
+recover), a stalled navigation and unavailable page automation. `BrowserModel`
+(`BrowserModel+Recovery.swift`) reloads a visible tab after its first crash in 60 s,
+shows a banner with a Reload action after the second, and stops reloading by itself from
+the third; a background tab is reloaded when selected. The DevTools session, including
+`Page.enable` and user scripts, survives a renderer crash (verified by the smoke test), but
+Page.enable cannot be re-sent until a navigation has revived the renderer, so recovery
+reloads first.
+
+A navigation that makes no progress for 30 s (`CAIRN_NAVIGATION_WATCHDOG_SECONDS` shortens
+it for tests) reports "stalled". The most common cause on a Mac that already holds a
+`Chromium Safe Storage` Keychain item created by a different signer (another Chromium-based
+app or an earlier ad-hoc Cairn build) is a pending Keychain authorization prompt: Chromium
+reads that item to open the cookie store, and no page loads until the prompt is answered.
+Answer it with **Always Allow**; every freshly ad-hoc-signed developer build prompts again.
+Cairn must not use `--use-mock-keychain` outside the smoke test.
+
+A second Cairn process on the same data folder exits quietly with CEF's exit code
+(21 or 24); the running instance is activated through `OnAlreadyRunningAppRelaunch`.
+The data folder is resolved through symlinks once at startup (CEF otherwise silently uses an
+in-memory profile for every Space), and a persistent Space whose profile directory CEF
+rejects refuses to load instead of losing data.
+
 ## Profiles and supported operations
 
 Persistent Space data resides at:

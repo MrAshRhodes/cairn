@@ -48,6 +48,11 @@ public final class BrowserModel: EngineTabDelegate {
     /// Prompts a page is waiting on and remembered site permissions; see BrowserModel+Permissions.swift.
     public let prompts = TabPromptCenter()
     public let sitePermissions = SitePermissionStore()
+    /// Process-level problems of live tabs (crash, hang, stalled navigation); drives the recovery banner.
+    public internal(set) var tabHealth: [UUID: EngineTabHealth] = [:]
+    @ObservationIgnored var recoveryPolicies: [UUID: RecoveryPolicy] = [:]
+    @ObservationIgnored var needsReload: Set<UUID> = []
+    @ObservationIgnored var recoveryClock: () -> Date = { Date() }
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
         self.engine = engine
@@ -114,6 +119,7 @@ public final class BrowserModel: EngineTabDelegate {
         let tab = liveTabs[id]
         cancelPrompts(for: id)
         liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil; blockedPopups[id] = nil
+        tabHealth[id] = nil; recoveryPolicies[id] = nil; needsReload.remove(id)
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
         tab?.delegate = nil
         tab?.close()
@@ -132,7 +138,8 @@ public final class BrowserModel: EngineTabDelegate {
         if url != nil, validURL == nil { report(ServiceError.navigation("Unsupported navigation URL.")) }
         let tab = TabItem(url: validURL)
         workspace.spaces[s].tabs.append(tab)
-        if activate { select(tab.id) } else { _ = liveTab(for: tab.id) }
+        // A background tab stays lazy: it has no view, so Chromium would never create a browser for it.
+        if activate { select(tab.id) }
         changed()
         return tab.id
     }
@@ -147,6 +154,7 @@ public final class BrowserModel: EngineTabDelegate {
         repairReferences()
         _ = liveTab(for: id)
         recentTabs.touch(id)
+        reloadIfNeeded(id)
         changed()
     }
 
@@ -154,7 +162,7 @@ public final class BrowserModel: EngineTabDelegate {
         guard let s = spaceIndex(id) else { return }
         workspace.selectedSpaceID = id
         repairReferences()
-        if let t = workspace.spaces[s].selectedTabID { _ = liveTab(for: t) }
+        if let t = workspace.spaces[s].selectedTabID { _ = liveTab(for: t); reloadIfNeeded(t) }
         changed()
     }
 
@@ -300,6 +308,7 @@ public final class BrowserModel: EngineTabDelegate {
         promptsTabStateChanged(id, previous: previous, state: state)
         let before = item(id)
         update(id) {
+            if Self.isBootstrapBlank(state, over: $0) { return }
             if let url = state.url, URLResolver.isNavigable(url) { $0.url = url }
             if !state.title.isEmpty { $0.title = state.title }
         }

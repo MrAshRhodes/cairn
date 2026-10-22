@@ -11,13 +11,16 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
  public:
   explicit LifeSpanHandler(Client& client) : TabHandler(client), client_(client) {}
   void OnAfterCreated(CefRefPtr<CefBrowser> created) override {
-    pendingBrowsers--;
-    creating[client_.contextKey]--;
+    if (client_.creationPending) {
+      client_.creationPending = false;
+      pendingBrowsers--;
+      creating[client_.contextKey]--;
+    }
     client_.browser = created;
     clients[created->GetIdentifier()] = &client_;
     client_.registration = created->GetHost()->AddDevToolsMessageObserver(client_.devToolsObserver());
     auto tab = owner;
-    if (!tab || tab.closing || stopping) created->GetHost()->CloseBrowser(true);
+    if (!tab || tab.closing || stopping || client_.abandoned) created->GetHost()->CloseBrowser(true);
     else [tab browserCreated];
   }
   bool DoClose(CefRefPtr<CefBrowser> b) override {
@@ -46,8 +49,7 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
                      bool gesture, const CefPopupFeatures&, CefWindowInfo& window, CefRefPtr<CefClient>& client,
                      CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
     for (auto it = pendingPopups_.begin(); it != pendingPopups_.end();) {
-      CCChromiumTab *pending = it->second;
-      it = pending && pending.cefBrowser ? pendingPopups_.erase(it) : std::next(it);
+      it = !it->second->creationPending ? pendingPopups_.erase(it) : std::next(it);
     }
     auto tab = owner;
     id<CCChromiumTabLifeSpanDelegate> host = (id)tab.delegate;
@@ -62,11 +64,13 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
     }
     CCChromiumTab *popup = [host chromiumTab:tab hostsPopup:String(url) disposition:kind userGesture:gesture];
     if (!popup) return true;
-    CefRefPtr<CefClient> popupClient = popup.adoptedClient;
+    CefRefPtr<Client> popupClient = popup.adoptedClient;
     if (!popupClient) return true;
     // CEF creates the browser inside the popup tab's view, in the opener's request context.
     pendingBrowsers++;
-    pendingPopups_[popupID] = popup;
+    creating[popupClient->contextKey]++;
+    popupClient->creationPending = true;
+    pendingPopups_[popupID] = popupClient;
     window.SetAsChild((__bridge void *)popup.view,
                       CefRect(0, 0, popup.view.bounds.size.width, popup.view.bounds.size.height));
     window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
@@ -76,16 +80,22 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
   void OnBeforePopupAborted(CefRefPtr<CefBrowser>, int popupID) override {
     auto it = pendingPopups_.find(popupID);
     if (it == pendingPopups_.end()) return;
-    CCChromiumTab *popup = it->second;
+    CefRefPtr<Client> pending = it->second;
+    CCChromiumTab *popup = pending->owner;
     pendingPopups_.erase(it);
-    pendingBrowsers--;
+    if (pending->creationPending) {
+      pending->creationPending = false;
+      pendingBrowsers--;
+      creating[pending->contextKey]--;
+    }
+    pending->abandoned = true;
     if (popup) [popup.delegate chromiumTabRequestsClose:popup];
     if (stopping && clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
   }
  private:
   Client& client_;
-  // Popups handed to CEF whose browser does not exist yet; weak so an unfinished popup never outlives its tab.
-  std::map<int, __weak CCChromiumTab *> pendingPopups_;
+  // Keep creation bookkeeping alive even if the popup tab is closed before CEF finishes.
+  std::map<int, CefRefPtr<Client>> pendingPopups_;
   IMPLEMENT_REFCOUNTING(LifeSpanHandler);
 };
 }

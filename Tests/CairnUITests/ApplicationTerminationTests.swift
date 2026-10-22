@@ -95,4 +95,24 @@ struct ApplicationTerminationTests {
         #expect(checkedAgain)
         #expect(termination.request(approval: { true }) { _ in } == .terminateNow)
     }
+
+    @Test func stuckPreparationIsAbandonedAtTheDeadline() async throws {
+        let replies = AsyncStream<Bool>.makeStream()
+        let termination = ApplicationTerminationCoordinator(prepare: { _ in }, deadline: .milliseconds(30))
+
+        #expect(termination.request(approval: { true }) { replies.continuation.yield($0) } == .terminateLater)
+        #expect(termination.request(approval: { true }) { _ in } == .terminateLater)
+        var iterator = replies.stream.makeAsyncIterator()
+        #expect(await iterator.next() == true)
+        #expect(termination.request(approval: { true }) { _ in } == .terminateNow)
+        replies.continuation.finish()
+    }
+
+    @Test func completingBeforeTheDeadlineRepliesOnlyOnce() async throws {
+        var replies = 0
+        let termination = ApplicationTerminationCoordinator(prepare: { $0() }, deadline: .milliseconds(30))
+        _ = termination.request(approval: { true }) { _ in replies += 1 }
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(replies == 1)
+    }
 }

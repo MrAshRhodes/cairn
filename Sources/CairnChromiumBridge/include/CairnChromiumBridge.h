@@ -109,6 +109,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)enableSpellChecking;
 @end
 
+// [Health]
+// Process-level health: `kind` is one of healthy, unresponsive, crashed, navigationStalled, automationUnavailable.
+// `detail` is a user-facing reason or hint and `code` the Chromium termination/exit code (0 when not applicable).
+@protocol CCChromiumTabHealthDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab health:(NSString *)kind detail:(NSString *)detail code:(NSInteger)code;
+@end
+
 // [JSDialog]
 // `type` is alert, confirm, prompt or beforeUnload. A dismissal also covers navigation resetting the dialog.
 @protocol CCChromiumTabJSDialogDelegate <NSObject>
@@ -191,6 +198,12 @@ typedef NS_ENUM(NSInteger, CCPopupDisposition) {
                      completion:(void (^)(NSArray<NSString *> *failures))completion;
 + (void)deleteProfile:(NSString *)profile completion:(void (^)(void))completion;
 + (NSArray<NSString *> *)removeOrphanProfilesKeeping:(NSArray<NSString *> *)directories;
+@end
+
+// [Testing]
+// Test harnesses only: crashes this tab's renderer to exercise recovery.
+@interface CCChromiumTab (Testing)
+- (void)crashRendererForTesting;
 @end
 
 NS_ASSUME_NONNULL_END

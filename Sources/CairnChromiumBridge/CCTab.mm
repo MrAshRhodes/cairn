@@ -7,6 +7,15 @@
 
 using namespace cc;
 
+namespace {
+// The 30 s default can be shortened (never below 1 s) so the smoke test can exercise the watchdog quickly.
+NSTimeInterval NavigationWatchdogSeconds() {
+  const char *override = getenv("CAIRN_NAVIGATION_WATCHDOG_SECONDS");
+  double seconds = override ? atof(override) : 0;
+  return seconds >= 1 ? seconds : 30;
+}
+}
+
 @interface CCContainerView : NSView
 @property(nonatomic, weak) CCChromiumTab *owner;
 @end
@@ -22,10 +31,14 @@ using namespace cc;
   CefRefPtr<Client> _client;
   int _nextMessage;
   double _zoom;
+  NSUInteger _navigationToken;
+  BOOL _navigationStalled;
+  NSUInteger _unresponsiveToken;
+  CefRefPtr<CefUnresponsiveProcessCallback> _unresponsiveCallback;
 }
 - (instancetype)initWithProfile:(NSString *)profile ephemeral:(BOOL)ephemeral {
   if ((self = [super init])) {
-    _profile = [profile copy]; _ephemeral = ephemeral; _zoom = 1;
+    _profile = [profile copy]; _ephemeral = ephemeral; _zoom = 1; _bootstrapDocument = YES;
     _state = [@{@"title": @"", @"progress": @0, @"isLoading": @NO, @"isSecure": @NO} mutableCopy];
     _configuredScripts = @[]; _scriptIDs = [NSMutableArray array]; _replies = [NSMutableDictionary dictionary];
     CCContainerView *container = [[CCContainerView alloc] initWithFrame:NSMakeRect(0, 0, 800, 600)];
@@ -39,13 +52,21 @@ using namespace cc;
 }
 - (CefRefPtr<CefBrowser>)cefBrowser { return _client ? _client->browser : nullptr; }
 - (void)adoptClient { if (!_client) _client = new Client(self); }
-- (CefRefPtr<CefClient>)adoptedClient { return _client; }
+- (CefRefPtr<Client>)adoptedClient { return _client; }
 - (void)ensureBrowser {
   if (_client || self.closing || !running || stopping || !self.view.window) return;
   if (!ready) {
     __weak CCChromiumTab *weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_MSEC), dispatch_get_main_queue(),
                    ^{ [weakSelf ensureBrowser]; });
+    return;
+  }
+  auto context = Context(self.profile, self.ephemeral);
+  if (!self.ephemeral && context->GetCachePath().empty()) {
+    // CEF rejected the profile directory and would silently use an in-memory profile.
+    contexts.erase(std::string("persistent:") + self.profile.UTF8String);
+    self.state[@"error"] = @"Storage for this Space is unavailable, so Cairn will not load it. Check the Chromium data folder.";
+    [self publish];
     return;
   }
   _client = new Client(self);
@@ -56,15 +77,33 @@ using namespace cc;
   CefBrowserSettings settings;
   // New request contexts initialize asynchronously. CreateBrowserSync can reject
   // them before their browser context is ready; CreateBrowser waits correctly.
+  _client->creationPending = true;
   pendingBrowsers++;
   creating[_client->contextKey]++;
-  bool accepted = CefBrowserHost::CreateBrowser(window, _client, "about:blank", settings, nullptr,
-                                                Context(self.profile, self.ephemeral));
+  bool accepted = CefBrowserHost::CreateBrowser(window, _client, "about:blank", settings, nullptr, context);
   if (!accepted) {
+    _client->creationPending = false;
     pendingBrowsers--;
     creating[_client->contextKey]--;
     _client = nullptr; self.state[@"error"] = @"CEF failed to create an embedded browser."; [self publish]; return;
   }
+  // A creation that never reaches OnAfterCreated must not leak the counter that gates shutdown.
+  CefRefPtr<Client> pending = _client;
+  __weak CCChromiumTab *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    if (!pending->creationPending) return;
+    pending->creationPending = false;
+    pending->abandoned = true;
+    pendingBrowsers--;
+    creating[pending->contextKey]--;
+    NSLog(@"Cairn: Chromium did not finish creating a browser within 20 s; abandoning it.");
+    CCChromiumTab *tab = weakSelf;
+    if (!tab) return;
+    if (tab->_client == pending) tab->_client = nullptr;
+    tab.state[@"error"] = @"Chromium did not finish starting this page. Reload to try again.";
+    tab.state[@"isLoading"] = @NO;
+    [tab publish];
+  });
 }
 - (void)browserCreated {
   auto browser = _client->browser;
@@ -74,31 +113,132 @@ using namespace cc;
   browser->GetHost()->SetZoomLevel(std::log(_zoom) / std::log(1.2));
   [self enableSpellChecking];
   [self applyAudioMuted];
-  self.scriptOperations = 1;
+  [self beginBoot];
+}
+// Boot = Page.enable + user scripts. Every attempt chain settles `scriptOperations` exactly once (success,
+// final failure or supersession), so a failed boot can never leave the tab unable to navigate.
+- (void)beginBoot {
+  self.bootFailed = NO;
+  self.pageEnabled = NO;
+  NSUInteger token = ++self.bootToken;
+  self.scriptOperations++;
+  [self enablePage:0 token:token];
+}
+- (void)settleBoot {
+  if (self.scriptOperations) self.scriptOperations--;
+}
+- (void)enablePage:(int)attempt token:(NSUInteger)token {
   __weak CCChromiumTab *weakSelf = self;
   [self call:@"Page.enable" params:@{} reply:^(NSDictionary *, NSError *error) {
     auto tab = weakSelf;
-    if (error) { tab.state[@"error"] = error.localizedDescription; [tab publish]; return; }
-    tab.pageEnabled = YES;
-    tab.scriptOperations--;
-    [tab setScripts:tab.configuredScripts];
+      if (!tab) return;
+    if (tab.bootToken != token || tab.closing) { [tab settleBoot]; [tab drainNavigation]; return; }
+    if (!error) {
+      tab.pageEnabled = YES;
+      [tab settleBoot];
+      [tab setScripts:tab.configuredScripts];
+      return;
+    }
+    if (attempt < 2) {
+      dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 1 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        auto again = weakSelf;
+        if (!again) return;
+        if (again.bootToken != token || again.closing) { [again settleBoot]; [again drainNavigation]; return; }
+        [again enablePage:attempt + 1 token:token];
+      });
+      return;
+    }
+    // Page automation is an enhancement: navigate anyway and say that Boosts are unavailable.
+    tab.bootFailed = YES;
+    [tab settleBoot];
+    [tab publishHealth:@"automationUnavailable" detail:error.localizedDescription code:0];
+    [tab drainNavigation];
   }];
 }
 - (void)publish { [self.delegate chromiumTab:self changed:[self.state copy]]; }
-- (void)loadURL:(NSString *)url { self.pendingURL = url; [self ensureBrowser]; [self drainNavigation]; }
+- (void)publishHealth:(NSString *)kind detail:(NSString *)detail code:(NSInteger)code {
+  id<CCChromiumTabDelegate> delegate = self.delegate;
+  if ([delegate conformsToProtocol:@protocol(CCChromiumTabHealthDelegate)]) {
+    [(id<CCChromiumTabHealthDelegate>)delegate chromiumTab:self health:kind detail:detail ?: @"" code:code];
+  } else if ([kind isEqual:@"crashed"]) {
+    self.state[@"error"] = [NSString stringWithFormat:@"The page %@.", detail]; [self publish];
+  }
+}
+- (void)loadURL:(NSString *)url {
+  self.pendingURL = url;
+  // The address bar shows the requested URL until the navigation commits.
+  self.state[@"url"] = url;
+  if ([url isEqualToString:@"about:blank"]) self.bootstrapDocument = NO;
+  // A renderer crash needs no boot: the DevTools session (Page.enable, user scripts) survives it, and Page.enable
+  // cannot be re-sent until a navigation has revived the renderer.
+  if (self.bootFailed && _client && _client->browser && !self.closing) [self beginBoot];
+  [self ensureBrowser];
+  [self drainNavigation];
+}
 - (void)drainNavigation {
   if (self.pendingURL && !self.scriptOperations && _client && _client->browser && !self.closing) {
     auto url = self.pendingURL; self.pendingURL = nil;
+    [self armNavigationWatchdog];
     _client->browser->GetMainFrame()->LoadURL(url.UTF8String);
   }
+}
+- (void)armNavigationWatchdog {
+  NSUInteger token = ++_navigationToken;
+  __weak CCChromiumTab *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NavigationWatchdogSeconds() * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
+    CCChromiumTab *tab = weakSelf;
+    if (!tab || tab->_navigationToken != token || tab.closing) return;
+    tab->_navigationStalled = YES;
+    [tab publishHealth:@"navigationStalled"
+                detail:@"This page has not started loading yet. If macOS asks whether Cairn may use "
+                       @"\"Chromium Safe Storage\" in your Keychain, choose Always Allow, then retry. Otherwise "
+                       @"check your network connection."
+                  code:0];
+  });
+}
+- (void)disarmNavigationWatchdog {
+  ++_navigationToken;
+  if (!_navigationStalled) return;
+  _navigationStalled = NO;
+  [self publishHealth:@"healthy" detail:@"" code:0];
+}
+- (void)renderProcessTerminated:(NSString *)reason code:(NSInteger)code {
+  self.awaitingRecovery = YES;
+  ++_unresponsiveToken; _unresponsiveCallback = nullptr;
+  ++_navigationToken; _navigationStalled = NO;
+  self.state[@"isLoading"] = @NO;
+  [self cancelReplies:@"Renderer stopped"];
+  [self publishHealth:@"crashed" detail:reason code:code];
+  [self publish];
+}
+- (void)renderProcessUnresponsive:(CefRefPtr<CefUnresponsiveProcessCallback>)callback {
+  _unresponsiveCallback = callback;
+  NSUInteger token = ++_unresponsiveToken;
+  [self publishHealth:@"unresponsive" detail:@"" code:0];
+  __weak CCChromiumTab *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    CCChromiumTab *tab = weakSelf;
+    if (!tab || tab->_unresponsiveToken != token || !tab->_unresponsiveCallback) return;
+    auto pending = tab->_unresponsiveCallback;
+    tab->_unresponsiveCallback = nullptr;
+    pending->Terminate();
+  });
+}
+- (void)renderProcessResponsive {
+  ++_unresponsiveToken; _unresponsiveCallback = nullptr;
+  [self publishHealth:@"healthy" detail:@"" code:0];
 }
 - (void)goBack { if (_client && _client->browser) _client->browser->GoBack(); }
 - (void)goForward { if (_client && _client->browser) _client->browser->GoForward(); }
 - (void)reloadIgnoringCache:(BOOL)ignoringCache {
-  if (!_client || !_client->browser) return;
+  if (!_client) { [self ensureBrowser]; return; }
+  if (!_client->browser) return;
+  NSString *url = self.state[@"url"];
+  [self armNavigationWatchdog];
   if (ignoringCache) _client->browser->ReloadIgnoreCache(); else _client->browser->Reload();
 }
-- (void)stop { self.pendingURL = nil; if (_client && _client->browser) _client->browser->StopLoad(); }
+- (void)stop { self.pendingURL = nil; [self disarmNavigationWatchdog]; if (_client && _client->browser) _client->browser->StopLoad(); }
 - (double)zoom { return _zoom; }
 - (void)setZoom:(double)value {
   _zoom = std::isfinite(value) ? std::clamp(value, 0.25, 5.0) : 1.0;
@@ -220,7 +360,7 @@ using namespace cc;
 }
 - (void)close {
   if (self.closing) return;
-  self.closing = YES; self.pendingURL = nil;
+  self.closing = YES; self.pendingURL = nil; ++_navigationToken;
   [self exitFullscreen];
   [self cancelReplies:@"Tab closed"];
   if (_client && _client->browser) _client->browser->GetHost()->CloseBrowser(true);

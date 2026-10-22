@@ -14,11 +14,19 @@ class DisplayHandler final : public TabHandler, public CefDisplayHandler {
     auto tab = owner; tab.state[@"progress"] = @(progress); [tab publish];
   }
   void OnTitleChange(CefRefPtr<CefBrowser>, const CefString& title) override {
-    auto tab = owner; tab.state[@"title"] = String(title); [tab publish];
+    auto tab = owner;
+    if (tab.bootstrapDocument) return; // The bootstrap about:blank title must not replace the tab's real one.
+    tab.state[@"title"] = String(title); [tab publish];
   }
   void OnAddressChange(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, const CefString& url) override {
     if (!frame->IsMain()) return;
-    auto tab = owner; tab.state[@"url"] = String(url); tab.state[@"isSecure"] = @NO; [tab publish];
+    auto tab = owner;
+    if (tab.bootstrapDocument) {
+      if (url == "about:blank") return;
+      tab.bootstrapDocument = NO;
+    }
+    [tab disarmNavigationWatchdog];
+    tab.state[@"url"] = String(url); tab.state[@"isSecure"] = @NO; [tab publish];
   }
   void OnFullscreenModeChange(CefRefPtr<CefBrowser>, bool fullscreen) override {
     [owner pageFullscreenChanged:fullscreen];

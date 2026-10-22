@@ -274,6 +274,7 @@ struct BrowserView: View {
                     }
                 }.font(.caption).background(.regularMaterial)
             }
+            TabHealthBanner(model: model, tabID: id)
             if let error = model.tabStates[id]?.errorMessage {
                 HStack {
                     Image(systemName: "exclamationmark.triangle")

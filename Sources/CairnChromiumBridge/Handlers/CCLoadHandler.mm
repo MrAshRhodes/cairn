@@ -9,6 +9,7 @@ class LoadHandler final : public TabHandler, public CefLoadHandler {
   explicit LoadHandler(Client& client) : TabHandler(client) {}
   void OnLoadingStateChange(CefRefPtr<CefBrowser>, bool loading, bool back, bool forward) override {
     auto tab = owner;
+    if (!tab.bootstrapDocument) { if (loading) [tab armNavigationWatchdog]; else [tab disarmNavigationWatchdog]; }
     tab.state[@"isLoading"] = @(loading);
     tab.state[@"canGoBack"] = @(back);
     tab.state[@"canGoForward"] = @(forward);
@@ -21,6 +22,7 @@ class LoadHandler final : public TabHandler, public CefLoadHandler {
   void OnLoadEnd(CefRefPtr<CefBrowser> b, CefRefPtr<CefFrame> frame, int) override {
     if (!frame->IsMain()) return;
     auto tab = owner;
+    if (tab.awaitingRecovery) { tab.awaitingRecovery = NO; [tab publishHealth:@"healthy" detail:@"" code:0]; }
     auto entry = b->GetHost()->GetVisibleNavigationEntry();
     auto ssl = entry ? entry->GetSSLStatus() : nullptr;
     tab.state[@"isSecure"] = @(ssl && ssl->IsSecureConnection() && ssl->GetCertStatus() == 0
@@ -31,6 +33,7 @@ class LoadHandler final : public TabHandler, public CefLoadHandler {
                    const CefString& text, const CefString&) override {
     if (!frame->IsMain() || code == ERR_ABORTED) return;
     auto tab = owner;
+    [tab disarmNavigationWatchdog];
     tab.state[@"error"] = [NSString stringWithFormat:@"%@ (%d)", String(text), code];
     tab.state[@"isSecure"] = @NO;
     [tab publish];

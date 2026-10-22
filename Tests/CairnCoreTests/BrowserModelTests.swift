@@ -41,7 +41,8 @@ private final class FakeTab: EngineTab {
     func emit(_ state: EngineTabState) { self.state = state; delegate?.engineTab(self, didChange: state) }
     func goBack() {}
     func goForward() {}
-    func reload(ignoringCache: Bool) {}
+    var reloads = 0
+    func reload(ignoringCache: Bool) { reloads += 1 }
     func stopLoading() {}
     func find(_ query: String, forward: Bool, completion: @escaping (Bool) -> Void) { completion(false) }
     func clearFind() {}
@@ -339,5 +340,133 @@ private final class FakeTab: EngineTab {
         #expect(model.liveTabs[id] == nil)
         _ = model.liveTab(for: id)
         #expect(engine.configurations.last?.profileID == "replacement")
+    }
+}
+
+@Suite @MainActor struct BrowserModelRecoveryTests {
+    private static let crash = EngineTabHealth.crashed(reason: "crashed", code: 5)
+
+    private func makeModel() throws -> (BrowserModel, FakeEngine, UUID, UUID) {
+        let a = TabItem(url: URL(string: "https://example.com/a")), b = TabItem(url: URL(string: "https://example.com/b"))
+        let model = BrowserModel(engine: FakeEngine(),
+                                 workspace: Workspace(spaces: [Space(name: "S", tabs: [a, b], selectedTabID: a.id)]))
+        _ = model.liveTab(for: a.id)
+        return (model, model.engine as! FakeEngine, a.id, b.id)
+    }
+
+    @Test func firstCrashReloadsTheVisibleTabSecondShowsBannerThirdStopsReloading() throws {
+        let (model, _, id, _) = try makeModel()
+        let tab = try #require(model.liveTabs[id] as? FakeTab)
+        var now = Date(timeIntervalSince1970: 1_000)
+        model.recoveryClock = { now }
+
+        model.engineTab(tab, healthDidChange: Self.crash)
+        #expect(tab.reloads == 1)
+        #expect(model.tabHealth[id] == nil)
+
+        now += 5
+        model.engineTab(tab, healthDidChange: Self.crash)
+        #expect(tab.reloads == 1)
+        #expect(model.tabHealth[id] == Self.crash)
+
+        now += 5
+        model.engineTab(tab, healthDidChange: Self.crash)
+        #expect(tab.reloads == 1)
+        #expect(model.tabHealth[id] == Self.crash)
+
+        now += RecoveryPolicy.window + 1
+        model.engineTab(tab, healthDidChange: Self.crash)
+        #expect(tab.reloads == 2)
+    }
+
+    @Test func manualRecoveryReloadsAndResetsTheCrashLoopGuard() throws {
+        let (model, _, id, _) = try makeModel()
+        let tab = try #require(model.liveTabs[id] as? FakeTab)
+        model.engineTab(tab, healthDidChange: Self.crash)
+        model.engineTab(tab, healthDidChange: Self.crash)
+        #expect(model.tabHealth[id] != nil)
+        model.recoverTab(id)
+        #expect(tab.reloads == 2)
+        #expect(model.tabHealth[id] == nil)
+        model.engineTab(tab, healthDidChange: Self.crash)
+        #expect(tab.reloads == 3)
+    }
+
+    @Test func backgroundCrashDefersTheReloadUntilSelected() throws {
+        let (model, engine, _, other) = try makeModel()
+        model.select(other)
+        let background = try #require(engine.tabs.first)
+        model.engineTab(background, healthDidChange: Self.crash)
+        #expect(background.reloads == 0)
+        #expect(model.tabHealth[model.workspace.spaces[0].tabs[0].id] == Self.crash)
+        model.select(model.workspace.spaces[0].tabs[0].id)
+        #expect(background.reloads == 1)
+        #expect(model.tabHealth.isEmpty)
+    }
+
+    @Test func stalledNavigationAndRecoveryNoticesClear() throws {
+        let (model, _, id, _) = try makeModel()
+        let tab = try #require(model.liveTabs[id] as? FakeTab)
+        model.engineTab(tab, healthDidChange: .navigationStalled(hint: "Waiting"))
+        #expect(model.tabHealth[id] == .navigationStalled(hint: "Waiting"))
+        model.engineTab(tab, healthDidChange: .healthy)
+        #expect(model.tabHealth[id] == nil)
+        model.engineTab(tab, healthDidChange: .unresponsive)
+        model.dismissHealthNotice(id)
+        #expect(model.tabHealth[id] == nil)
+    }
+
+    @Test func bootstrapBlankNeverReplacesTheSavedURLAndTitle() throws {
+        let url = URL(string: "https://example.com/saved")!
+        let item = TabItem(url: url, title: "Saved")
+        let model = BrowserModel(engine: FakeEngine(),
+                                 workspace: Workspace(spaces: [Space(name: "S", tabs: [item], selectedTabID: item.id)]))
+        let tab = try #require(model.liveTab(for: item.id) as? FakeTab)
+        var saves = 0
+        model.onChange = { saves += 1 }
+        tab.emit(EngineTabState(url: URL(string: "about:blank"), title: "about:blank"))
+        tab.emit(EngineTabState(title: "about:blank"))
+        #expect(model.item(item.id)?.url == url)
+        #expect(model.item(item.id)?.title == "Saved")
+        #expect(saves == 0)
+        let real = URL(string: "https://example.com/real")!
+        tab.emit(EngineTabState(url: real, title: "Real"))
+        #expect(model.item(item.id)?.url == real)
+        #expect(model.item(item.id)?.title == "Real")
+    }
+
+    @Test func backgroundTabsStayLazyUntilSelected() throws {
+        let engine = FakeEngine()
+        let model = BrowserModel(engine: engine)
+        let id = model.newTab(url: URL(string: "https://example.com/bg"), activate: false)
+        #expect(engine.tabs.isEmpty)
+        #expect(model.tabStates[id] == nil)
+        model.select(id)
+        #expect(engine.tabs.count == 1)
+        #expect(engine.tabs[0].state.url?.absoluteString == "https://example.com/bg")
+    }
+}
+
+@Suite struct EngineStartupTests {
+    @Test(arguments: [(21, true), (24, true), (0, false), (1, false), (7, false)])
+    func onlyProfileSingletonExitsAreQuiet(code: Int, quiet: Bool) {
+        let outcome = EngineStartupOutcome(exitCode: code)
+        if quiet { #expect(outcome == .alreadyRunning(code: Int32(code))) } else { #expect(outcome == .failed(code: code)) }
+    }
+
+    @Test func storageRootResolvesSymlinksAndIsStable() throws {
+        let directory = try TestDirectory()
+        let real = directory.url.appendingPathComponent("real", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let link = directory.file("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let resolved = try EngineStorageRoot.resolve(link.appendingPathComponent("Chromium"))
+        let direct = try EngineStorageRoot.resolve(real.appendingPathComponent("Chromium"))
+        #expect(resolved == direct)
+        #expect(!resolved.path.contains("/link/"))
+        #expect(try EngineStorageRoot.resolve(resolved) == resolved)
+        var info = stat()
+        #expect(stat(resolved.path, &info) == 0 && (info.st_mode & 0o777) == 0o700)
     }
 }
