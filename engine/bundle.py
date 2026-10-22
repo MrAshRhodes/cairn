@@ -7,7 +7,7 @@ import plistlib
 import shutil
 import subprocess
 
-from tool import ROOT, LOCK, read_json, validate_lock
+from tool import ROOT, LOCK, identity, read_json, validate_lock
 
 FRAMEWORK = "Chromium Embedded Framework.framework"
 HELPERS = [("", ""), (" (Alerts)", ".alerts"), (" (GPU)", ".gpu"),
@@ -23,7 +23,7 @@ def architecture(path, expected):
 def bundle(app, arch, configuration, helper=None):
     lock = validate_lock(read_json(LOCK))
     cef = ROOT / "engine/cef" / arch
-    if read_json(cef / ".cairn-pin.json") != lock["artifacts"][arch]:
+    if read_json(cef / ".cairn-pin.json") != identity(lock["artifacts"][arch]):
         raise ValueError("Downloaded CEF does not match lock; run engine/tool.py fetch")
     info_path = app / "Contents/Info.plist"
     info = plistlib.loads(info_path.read_bytes())
