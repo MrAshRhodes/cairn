@@ -1,11 +1,15 @@
 // CCRuntime.mm — CEF process lifecycle: library loading, initialization, the external message pump,
 // request contexts (one per Space profile), profile clearing and shutdown.
 #import "CCInternal.h"
+#import "Handlers/CCPending.h"
 #import <crt_externs.h>
 #include <algorithm>
+#include <atomic>
+#include <climits>
+#include <cstdlib>
 #include <memory>
+#include <unistd.h>
 #include "include/cef_application_mac.h"
-#include "include/cef_cookie.h"
 #include "include/cef_version.h"
 #include "include/wrapper/cef_library_loader.h"
 
@@ -13,6 +17,11 @@ using namespace cc;
 
 namespace {
 bool terminated = false;
+// Read by the watchdog on a background queue; set once the shutdown completions have run.
+std::atomic<bool> shutdownCompleted{false};
+std::atomic<bool> shuttingDownCEF{false};
+constexpr int64_t kCloseWarningSeconds = 4;
+constexpr int64_t kHardExitSeconds = 10;
 bool useMockKeychain = false;
 typedef void (^ShutdownCompletion)(void);
 NSMutableArray<ShutdownCompletion> *shutdownCompletions;
@@ -35,9 +44,25 @@ class Application final : public CefApp, public CefBrowserProcessHandler {
                                      CefRefPtr<CefCommandLine> command_line) override {
     // Without this, an unattended run blocks forever on a Keychain authorization prompt
     // for the "Chromium Safe Storage" item and no page ever commits.
+    // Chromium's built-in blocker makes window.open() return null without telling the browser. Turning it
+    // off routes every attempt to OnBeforePopup (CCLifeSpanHandler.mm), where Cairn's popup policy blocks
+    // or adopts it and the user can see what was blocked.
+    if (process_type.empty()) command_line->AppendSwitch("disable-popup-blocking");
     if (useMockKeychain && process_type.empty()) command_line->AppendSwitch("use-mock-keychain");
+    // Lets CefRequestHandler::GetAuthCredentials see HTTP authentication instead of Chromium's own prompt.
+    if (process_type.empty()) command_line->AppendSwitch("disable-chrome-login-prompt");
   }
   void OnContextInitialized() override { ready = true; }
+  bool OnAlreadyRunningAppRelaunch(CefRefPtr<CefCommandLine>, const CefString&) override {
+    // A second launch on this profile: surface the running instance instead of letting CEF open an untracked window.
+    dispatch_async(dispatch_get_main_queue(), ^{
+      [NSApp activateIgnoringOtherApps:YES];
+      for (NSWindow *window in NSApp.windows) {
+        if (window.canBecomeMainWindow) { [window makeKeyAndOrderFront:nil]; break; }
+      }
+    });
+    return true;
+  }
   void OnScheduleMessagePumpWork(int64_t delay) override {
     // CEF can call this on any thread. Chromium work stays on AppKit's main thread.
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, std::clamp<int64_t>(delay, 0, 33) * NSEC_PER_MSEC),
@@ -49,25 +74,6 @@ class Application final : public CefApp, public CefBrowserProcessHandler {
   IMPLEMENT_REFCOUNTING(Application);
 };
 
-class Done final : public CefCompletionCallback {
- public:
-  explicit Done(void (^block)(void)) : block_([block copy]) {}
-  void OnComplete() override { block_(); }
- private:
-  void (^block_)(void);
-  IMPLEMENT_REFCOUNTING(Done);
-};
-class CookiesDone final : public CefDeleteCookiesCallback {
- public:
-  explicit CookiesDone(void (^block)(void)) : block_([block copy]) {}
-  void OnComplete(int) override {
-    auto callback = block_;
-    dispatch_async(dispatch_get_main_queue(), callback);
-  }
- private:
-  void (^block_)(void);
-  IMPLEMENT_REFCOUNTING(CookiesDone);
-};
 }
 
 namespace cc {
@@ -77,6 +83,9 @@ bool stopping = false;
 int pendingBrowsers = 0;
 std::map<std::string, CefRefPtr<CefRequestContext>> contexts;
 std::map<int, CefRefPtr<Client>> clients;
+std::map<std::string, int> creating;
+
+NSString *ProfileRoot() { return rootPath; }
 
 NSString *String(const CefString& value) {
   return [NSString stringWithUTF8String:value.ToString().c_str()] ?: @"";
@@ -94,6 +103,9 @@ CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral) {
   CefRequestContextSettings settings;
   if (!ephemeral) {
     CefString(&settings.cache_path) = [[rootPath stringByAppendingPathComponent:profile] UTF8String];
+    // Most login cookies have no expiry; Cairn restores tabs, so they must survive a relaunch.
+    settings.persist_session_cookies = true;
+    LoadTrackedOrigins(profile);
   }
   auto context = CefRequestContext::CreateContext(settings, nullptr);
   contexts[key] = context;
@@ -101,18 +113,24 @@ CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral) {
 }
 
 void FinishShutdown() {
-  if (!running || !stopping || !clients.empty() || pendingBrowsers) return;
+  if (!running || !stopping) return;
+  if (!clients.empty() || pendingBrowsers) return;
+  // A nested run loop can drain this block from inside CefDoMessageLoopWork; CefShutdown must not run there.
+  if (pumping) { dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); }); return; }
   running = false;
   ready = false;
   [pumpTimer invalidate];
   pumpTimer = nil;
   contexts.clear();
+  ReleaseDownloads();
+  shuttingDownCEF = true;
   CefShutdown();
   library.reset();
   terminated = true; // CEF may only be initialized once per process.
   NSArray<ShutdownCompletion> *completions = [shutdownCompletions copy];
   shutdownCompletions = nil;
   for (ShutdownCompletion completion in completions) completion();
+  shutdownCompleted = true;
 }
 }
 
@@ -138,7 +156,9 @@ void FinishShutdown() {
 + (BOOL)startWithRoot:(NSString *)root error:(NSError **)error {
   NSAssert(NSThread.isMainThread, @"CEF must initialize on the main thread");
   if (running && !stopping) {
-    if ([rootPath isEqualToString:root]) return YES;
+    char existing[PATH_MAX];
+    const char *requested = realpath(root.fileSystemRepresentation, existing) ? existing : root.fileSystemRepresentation;
+    if ([rootPath isEqualToString:[NSString stringWithUTF8String:requested]]) return YES;
     if (error) *error = Failure(@"CEF is already initialized with a different data root.");
     return NO;
   }
@@ -149,15 +169,24 @@ void FinishShutdown() {
   else if (![NSBundle.mainBundle.bundlePath.pathExtension isEqualToString:@"app"])
     failure = @"Chromium requires a Cairn.app bundle. Run engine/bundle.py after building.";
   if (failure) { if (error) *error = Failure(failure); return NO; }
-  rootPath = [root copy];
   if (![NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES
                                                attributes:@{NSFilePosixPermissions: @0700} error:error]) return NO;
+  // CEF requires every per-Space cache path to sit under the symlink-resolved root; otherwise it silently falls back to
+  // an in-memory profile. Resolve once here and derive every path from the result.
+  char resolved[PATH_MAX];
+  if (!realpath(root.fileSystemRepresentation, resolved)) {
+    if (error) *error = Failure(@"The Chromium data folder cannot be resolved.");
+    return NO;
+  }
+  root = [NSString stringWithUTF8String:resolved];
+  rootPath = [root copy];
   library = std::make_unique<CefScopedLibraryLoader>();
   if (!library->LoadInMain()) {
     library.reset();
     if (error) *error = Failure(@"CEF framework could not be loaded. Verify bundle layout, architecture and signatures.");
     return NO;
   }
+  ApplyPendingProfileWork(root);
   CefSettings settings;
   settings.external_message_pump = true;
   settings.command_line_args_disabled = true;
@@ -172,7 +201,10 @@ void FinishShutdown() {
   if (!running) {
     library.reset();
     terminated = true;
-    if (error) *error = Failure(@"CEF initialization failed (including singleton/profile lock). See cef.log.");
+    int code = CefGetExitCode();
+    NSString *message = [NSString stringWithFormat:@"CEF initialization failed (exit code %d, including singleton/profile lock). See cef.log.", code];
+    if (error) *error = [NSError errorWithDomain:@"org.cairn.Chromium.Startup" code:code
+                                        userInfo:@{NSLocalizedDescriptionKey: message}];
     return NO;
   }
   // CEF's external pump needs a bounded idle fallback as well as explicit work
@@ -188,40 +220,51 @@ void FinishShutdown() {
           CHROME_VERSION_MAJOR, CHROME_VERSION_MINOR, CHROME_VERSION_BUILD, CHROME_VERSION_PATCH, CEF_VERSION];
 }
 + (void)shutdown {
+  NSAssert(NSThread.isMainThread, @"CEF must shut down on the main thread");
   if (!running || stopping) return;
   stopping = true;
+  // Arm before any CEF calls: CloseBrowser/callback cancellation can also stop making progress.
+  // Never call CefShutdown with live browsers or unresolved creations. A failed quit must not
+  // masquerade as a clean exit or invoke completion handlers that claim Chromium flushed its data.
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kHardExitSeconds * NSEC_PER_SEC),
+                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+    if (shutdownCompleted) return;
+    const char *phase = shuttingDownCEF ? "CEF teardown/completion" : "browser close/creation";
+    NSLog(@"Cairn: Chromium shutdown FAILED after %lld s (%s); terminating with failure. "
+           "Chromium data may not have been flushed.", kHardExitSeconds, phase);
+    static const char diagnostic[] =
+        "Cairn: Chromium shutdown timed out; unclean termination (exit 1). Data may not be flushed.\n";
+    (void)write(STDERR_FILENO, diagnostic, sizeof(diagnostic) - 1);
+    _exit(EXIT_FAILURE);
+  });
+  ReleaseDownloads();
   auto snapshot = clients;
   for (const auto& pair : snapshot) {
     auto client = pair.second;
     client->owner.closing = YES;
+    CancelPending(client->owner);
     if (client->browser) client->browser->GetHost()->CloseBrowser(true);
   }
   if (clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, kCloseWarningSeconds * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    if (!running || !stopping) return;
+    NSLog(@"Cairn: still waiting for Chromium shutdown: %zu open and %d pending browsers. "
+           "Refusing unsafe CEF teardown.", clients.size(), pendingBrowsers);
+    auto remaining = clients;
+    for (const auto& pair : remaining) {
+      if (pair.second->browser) pair.second->browser->GetHost()->CloseBrowser(true);
+    }
+    FinishShutdown();
+  });
 }
 + (void)shutdownWithCompletion:(void (^)(void))completion {
   NSAssert(NSThread.isMainThread, @"CEF must shut down on the main thread");
-  if (!running) {
+  if (terminated || (!running && !stopping)) {
     dispatch_async(dispatch_get_main_queue(), completion);
     return;
   }
   if (!shutdownCompletions) shutdownCompletions = [NSMutableArray array];
   [shutdownCompletions addObject:[completion copy]];
   [self shutdown];
-}
-+ (void)clearProfile:(NSString *)profile cookies:(BOOL)cookies cache:(BOOL)cache
-         completion:(void (^)(void))completion {
-  if (!running || stopping) { completion(); return; }
-  auto context = Context(profile, false);
-  dispatch_group_t group = dispatch_group_create();
-  if (cookies) {
-    dispatch_group_enter(group);
-    CefRefPtr<CookiesDone> done = new CookiesDone(^{ dispatch_group_leave(group); });
-    if (!context->GetCookieManager(nullptr)->DeleteCookies("", "", done)) done->OnComplete(0);
-  }
-  if (cache) {
-    dispatch_group_enter(group);
-    context->ClearHttpCache(new Done(^{ dispatch_group_leave(group); }));
-  }
-  dispatch_group_notify(group, dispatch_get_main_queue(), completion);
 }
 @end

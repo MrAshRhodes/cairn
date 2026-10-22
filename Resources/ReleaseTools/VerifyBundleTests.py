@@ -115,7 +115,9 @@ class VerifyBundleTests(unittest.TestCase):
             self.write_plist(helper / "Contents/Info.plist", {
                 "CFBundleExecutable": name, "CFBundleName": name, "CFBundlePackageType": "APPL",
                 "CFBundleIdentifier": info["CFBundleIdentifier"] + ".helper" + identifier,
-                "LSUIElement": True, "LSMinimumSystemVersion": info["LSMinimumSystemVersion"]})
+                "LSUIElement": True, "LSMinimumSystemVersion": info["LSMinimumSystemVersion"],
+                "NSCameraUsageDescription": info["NSCameraUsageDescription"],
+                "NSMicrophoneUsageDescription": info["NSMicrophoneUsageDescription"]})
             helpers.append((suffix, helper))
         for library in (versioned / "Libraries").glob("*.dylib"):
             sign(library)
@@ -209,6 +211,23 @@ class VerifyBundleTests(unittest.TestCase):
             path = self.work / f"without-{key.rsplit('.', 1)[-1]}.plist"
             path.write_bytes(plistlib.dumps({name: value for name, value in entitlements.items() if name != key}))
             cases.append((f"required entitlement {key} is missing", self.assemble(signing={"app": path})))
+        self.assertEachRejected(cases)
+
+    def test_capture_runs_in_the_helpers(self):
+        empty = self.work / "empty.plist"
+        empty.write_bytes(plistlib.dumps({}))
+        cases = [("Cairn Helper: required entitlement com.apple.security.device.camera is missing",
+                  self.assemble(signing={"helper": empty}))]
+        for key in ("NSCameraUsageDescription", "NSMicrophoneUsageDescription"):
+            app = self.assemble()
+            helper = app / "Contents/Frameworks/Cairn Helper (GPU).app"
+            path = helper / "Contents/Info.plist"
+            info = plistlib.loads(path.read_bytes())
+            del info[key]
+            path.write_bytes(plistlib.dumps(info))
+            sign(helper, ENTITLEMENTS / "renderer.plist")
+            sign(app, ROOT / "Resources/Cairn.entitlements")
+            cases.append((f"Cairn Helper (GPU): {key} must match the app's", app))
         self.assertEachRejected(cases)
 
     def test_info_plist_contract_is_enforced(self):

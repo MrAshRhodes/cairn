@@ -9,7 +9,6 @@ public struct PreferencesView: View {
     let services: BrowserServices?
     @ViewState<String> private var selectedTab = "general"
     @ViewState<Bool> private var clearHistoryConfirmation = false
-    @ViewState<Bool> private var clearDataConfirmation = false
     @ViewState<Bool> private var automaticUpdates = false
     @ViewState<ModuleScriptReview?> private var scriptReview = nil
     public init(model: BrowserModel, services: BrowserServices? = nil) {
@@ -24,8 +23,13 @@ public struct PreferencesView: View {
                 TabView(selection: $selectedTab) {
                     general(services).tabItem { Label("General", systemImage: "slider.horizontal.3") }.tag("general")
                     privacy(services).tabItem { Label("Privacy", systemImage: "hand.raised") }.tag("privacy")
+                    SitePermissionsView(services: services).tabItem { Label("Permissions", systemImage: "checkmark.shield") }.tag("permissions")
                     updates(services).tabItem { Label("Updates", systemImage: "arrow.triangle.2.circlepath") }.tag("updates")
+                    LinksPane(services: services).tabItem { Label("Links", systemImage: "link") }.tag("links")
                     modules(services).tabItem { Label("Modules", systemImage: "puzzlepiece.extension") }.tag("modules")
+                    SiteSearchPane(services: services).tabItem { Label("Site Search", systemImage: "magnifyingglass") }.tag("site-search")
+                    Button("Edit Keyboard Shortcuts…") { services.sheet = .shortcuts }
+                        .tabItem { Label("Shortcuts", systemImage: "keyboard") }.tag("shortcuts")
                 }.padding(.horizontal, 18).padding(.bottom, 18)
             } else {
                 ContentUnavailableView("Settings require an app session", systemImage: "gearshape",
@@ -42,12 +46,6 @@ public struct PreferencesView: View {
             Button("Cancel", role: .cancel) {}
             Button("Clear History", role: .destructive) { services?.clearHistory() }
         } message: { Text("All locally recorded visits will be removed. Your tabs, pins, and favorites are kept.") }
-        .alert("Clear website data in all Spaces?", isPresented: $clearDataConfirmation) {
-            Button("Cancel", role: .cancel) {}
-            Button("Clear Website Data", role: .destructive) {
-                Task { await services?.clearSiteData() }
-            }
-        } message: { Text("Cookies, caches, and local storage will be removed for every Space. Websites may sign you out. This cannot be undone.") }
     }
 
     private func general(_ services: BrowserServices) -> some View {
@@ -82,6 +80,7 @@ public struct PreferencesView: View {
                     Text("\(Int(settings.sidebarWidth))").font(.caption.monospacedDigit()).frame(width: 32)
                 }
             }
+            PageToolsPreferencesSection(services: services)
             if !services.settingsWritable {
                 Label("Settings are read-only because their saved file could not be read.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
@@ -99,15 +98,8 @@ public struct PreferencesView: View {
                     Spacer()
                     Button("Clear History…") { clearHistoryConfirmation = true }.disabled(services.history == nil)
                 }
-                HStack {
-                    Text("Cookies and website storage")
-                    Spacer()
-                    if services.privacyBusy { ProgressView().controlSize(.small) }
-                    Button("Clear Website Data…") { clearDataConfirmation = true }.disabled(services.privacyBusy)
-                }
-                Text("Open pages can create new site data after clearing. Close tabs before clearing if you need them to remain empty.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
+            SiteDataPreferences(services: services)
             Section("Your files") {
                 Text(services.directory.path).font(.caption.monospaced()).textSelection(.enabled)
                 Button("Reveal Cairn Data Folder") {

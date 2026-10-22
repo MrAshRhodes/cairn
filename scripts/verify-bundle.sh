@@ -143,6 +143,10 @@ for pair in ":" " (Alerts):.alerts" " (GPU):.gpu" " (Plugin):.plugin" " (Rendere
   [[ "$(plist_value "$hinfo" CFBundleIdentifier)" == "$main_id.helper$id_suffix" ]] || fail "$name: CFBundleIdentifier must be $main_id.helper$id_suffix"
   [[ "$(plist_value "$hinfo" LSUIElement)" == true ]] || fail "$name: LSUIElement must be true"
   [[ "$(plist_value "$hinfo" LSMinimumSystemVersion)" == "$min_os" ]] || fail "$name: LSMinimumSystemVersion differs from the app"
+  # macOS names the process that captures in its permission prompt, and capture runs in the helpers.
+  for key in NSCameraUsageDescription NSMicrophoneUsageDescription; do
+    [[ "$(plist_value "$hinfo" "$key")" == "$(plist_value "$info" "$key")" ]] || fail "$name: $key must match the app's"
+  done
 done
 for bundle in "$contents"/Frameworks/*.app; do
   case "${bundle##*/}" in
@@ -239,6 +243,9 @@ for suffix in "" " (Alerts)" " (GPU)" " (Plugin)" " (Renderer)"; do
   [[ -d "$helper" ]] || continue
   case "$suffix" in
     " (GPU)"|" (Renderer)") check_entitlements "$helper" "Cairn Helper$suffix" "$root/engine/entitlements/renderer.plist" com.apple.security.cs.allow-jit ;;
+    # Capture runs in the generic helper, so it must hold the camera and microphone entitlements.
+    "") check_entitlements "$helper" "Cairn Helper" "$root/engine/entitlements/helper.plist" \
+      com.apple.security.device.camera com.apple.security.device.audio-input ;;
     *) check_entitlements "$helper" "Cairn Helper$suffix" "$root/engine/entitlements/helper.plist" ;;
   esac
 done

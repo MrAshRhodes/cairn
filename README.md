@@ -69,16 +69,37 @@ downloads.
 ## Developer preview status
 
 The implementation includes native Spaces, vertical tabs,
-favorites and pins, session restoration and archiving, command search, split
-browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
-explicit trust decision. Downloads are delegated to Cairn's URL-based downloader;
-website cookies are not forwarded, so downloads requiring a website sign-in may fail.
+favorites and pins, session restoration and archiving, a command bar with site
+search and a remappable keyboard map (with an Arc-compatible preset), split
+browsing with up to four panes, find/zoom, local history, downloads, and CSS/JavaScript
+Boosts with an explicit trust decision. Newer pieces: sidebar folders and Space themes, a consent-based
+importer for Chromium-family browsers ([docs](docs/features/import.md)), a visual Boost
+editor with Zap and `.cairnboost` sharing ([docs](docs/features/boosts.md)), and link
+routing rules ([docs](docs/features/links.md); Peek overlay and quick window are not built
+yet). Developer Tools, view source, printing / Save Page as PDF and per-site zoom are
+available through the menus and command bar, with remappable shortcuts.
+Downloads started by a page, including **Download Linked File** and **Save Image As…**
+in its context menu, are performed by Chromium
+itself, so the page's cookies, sign-in, POST body and `blob:` sources are kept; Cairn
+asks where to save, shows progress, and supports pause, resume and cancel. Only links
+pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
+website cookies.
+
+Chromium integration also includes gesture-gated popups with opener/context
+preservation, site permission and JavaScript dialog prompts, HTTP authentication,
+fail-closed TLS handling, favicon and audio/mute state, DevTools, page source,
+PDF export/viewing, per-site zoom and language/user-agent preferences. Renderer
+crashes and stalled navigation have visible recovery states; startup and shutdown
+have bounded deadlines. These are implemented capabilities, not a claim of full
+Arc feature parity or production readiness.
 
 Automated tests cover the integrated services and legacy settings compatibility. The
 bundled arm64 Chromium engine has also passed native rendering checks for CSS
 grid, container queries, `:has()`, JavaScript modules, network requests, responsive
 viewport resizing, and compositor output, alongside profile isolation and lifecycle
-checks. These are local development checks, not release-security certification.
+checks. The combined engine smoke also exercises popup messaging, permission/dialog
+denials, authenticated/POST/blob downloads, crash recovery, media, PDF export and
+page tools. These are local development checks, not release-security certification.
 
 ![Actual Chromium rendering of Cairn's local responsive test page](site/assets/chromium-rendering.png)
 
@@ -87,6 +108,10 @@ Cairn shell or a claim that every website works.*
 
 Full interactive Chromium browsing acceptance, VoiceOver, Intel CEF runtime
 testing, Apple Developer ID signing and notarization remain **unverified**.
+Camera/microphone approvals, native print/save panels, real-world sign-in flows,
+long-running sessions and website compatibility still require hands-on acceptance.
+See the [release-readiness boundaries](docs/reference/functional-spec.md#release-readiness-boundaries)
+for the remaining feature and validation limits.
 Private update-signing material remains in the maintainer's local Keychain, not
 GitHub. The weekly release workflow is wired but cannot publish until CI signing
 is explicitly provisioned; see the [release guide](docs/RELEASING.md#weekly-release-automation).
@@ -140,6 +165,7 @@ JavaScript.
 ## Project guide
 
 - [Functional specification and reference boundaries](docs/reference/functional-spec.md)
+- Features: [command bar](docs/features/command-bar.md), [keyboard shortcuts](docs/features/shortcuts.md), [split view](docs/features/split-view.md)
 - [Contributing and development invariants](CONTRIBUTING.md)
 - [Privacy](PRIVACY.md) and [security policy](SECURITY.md)
 - [Independent implementation policy](docs/CLEAN_ROOM.md)

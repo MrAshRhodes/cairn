@@ -6,13 +6,23 @@ enum SmokeError: Error { case failed(String) }
 
 @MainActor final class Smoke: NSObject, EngineTabDelegate, EngineTabContextMenuEvents {
     let engine: ChromiumEngine
+    let root: URL
     let base: URL
     var windows: [NSWindow] = []
     var tabs: [EngineTab] = []
     var popups = 0
     var externalURLs: [URL] = []
+    var faviconEvents: [UUID: [NSImage?]] = [:]
+    var audioEvents: [UUID: [Bool]] = [:]
+    var popupTabs: [EngineTab] = []
+    var blockedPopups = 0
+    var closeRequests: [UUID] = []
+    var healthEvents: [(tab: UUID, health: EngineTabHealth)] = []
+    var recordedURLs: [UUID: [URL?]] = [:]
+    var recording: Set<UUID> = []
 
     init(root: URL, base: URL) {
+        self.root = root
         self.base = base
         engine = ChromiumEngine(dataRoot: root)
     }
@@ -106,7 +116,14 @@ enum SmokeError: Error { case failed(String) }
                 .init(id: "start", source: "window.__cairnStart = document.readyState === 'loading';", injection: .documentStart),
                 .init(id: "end", source: "window.__cairnEnd = !!document.body;", injection: .documentEnd)
             ])
+            recording.insert(first.id)
             try await load(first)
+            recording.remove(first.id)
+            print("CAIRN_SMOKE_READY")
+            try require(recordedURLs[first.id, default: []].allSatisfy { $0 != nil && $0?.absoluteString != "about:blank" },
+                        "bootstrap about:blank never reaches the tab state and the address is never empty after load()")
+            try require(try await js(first, "location.href") as? String == first.state.url?.absoluteString,
+                        "reported navigation completion belongs to the requested document, not bootstrap about:blank")
             let scriptState = try await js(first, "[window.__cairnStart, window.__cairnEnd, document.readyState]")
             print("SCRIPT STATE: \(String(describing: scriptState))")
             try require(try await js(first, "window.__cairnStart && window.__cairnEnd") as? Bool == true,
@@ -161,6 +178,7 @@ enum SmokeError: Error { case failed(String) }
             try await wait { !first.state.isLoading && first.state.url == self.base }
             await engine.clearBrowsingData(profileID: "first", kinds: [.cookies, .cache])
             try require(try await js(first, "document.cookie === ''") as? Bool == true, "profile cookie removal completes")
+            try await siteDataScenario()
             _ = try await js(first, "window.open('/popup'); true")
             try await Task.sleep(nanoseconds: 200_000_000)
             try require(popups == 0, "unsolicited popup is blocked")
@@ -168,24 +186,78 @@ enum SmokeError: Error { case failed(String) }
             try await wait { !self.externalURLs.isEmpty }
             try require(externalURLs.first?.absoluteString == "mailto:smoke@example.com" && first.state.errorMessage == nil,
                         "external protocol is reported to the app, never launched by Chromium")
+            try await runMedia()
+            try await checkPopups()
+            try await checkPrompts()
+            try await checkDownloads()
+            try await checkRendererCrashRecovery()
+            try await checkNavigationWatchdog()
+            try await pageToolsChecks()
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
         }
+        let late = make("third")
+        late.load(base) // Browser creation is still pending when shutdown starts.
         engine.shutdown()
+        let started = ContinuousClock.now
         ChromiumEngineModule.prepareForTermination {
+            print("SHUTDOWN_MS=\((ContinuousClock.now - started) / .milliseconds(1))")
             NSApp.terminate(nil)
         }
     }
 
+    func checkRendererCrashRecovery() async throws {
+        let tab = make("first")
+        tab.setUserScripts([
+            .init(id: "start", source: "window.__cairnStart = document.readyState === 'loading';", injection: .documentStart),
+            .init(id: "end", source: "window.__cairnEnd = !!document.body;", injection: .documentEnd)
+        ])
+        try await load(tab)
+        healthEvents.removeAll()
+        ChromiumEngineModule.crashRendererForTesting(tab)
+        try await wait { self.healthEvents.contains { $0.tab == tab.id && $0.health.isCrash } }
+        try require(true, "renderer crash is reported as a health event")
+        tab.reload(ignoringCache: false)
+        try await wait { self.healthEvents.contains { $0.tab == tab.id && $0.health == .healthy } }
+        try require(try await js(tab, "document.readyState") as? String == "complete", "reload after a renderer crash restores the page")
+        try require(try await js(tab, "window.__cairnStart && window.__cairnEnd") as? Bool == true,
+                    "user scripts are installed again after a renderer crash")
+    }
+
+    func checkNavigationWatchdog() async throws {
+        let tab = make("second")
+        healthEvents.removeAll()
+        tab.load(base.appendingPathComponent("hang"))
+        try await wait { self.healthEvents.contains { $0.tab == tab.id && $0.health.isStall } }
+        let hint = healthEvents.compactMap { event -> String? in
+            if case .navigationStalled(let hint) = event.health { return hint } else { return nil }
+        }.first ?? ""
+        try require(hint.contains("Chromium Safe Storage"), "stalled navigation is reported with the Keychain hint")
+        tab.stopLoading()
+    }
+
     func engineTab(_ tab: EngineTab, didChange state: EngineTabState) {
+        if recording.contains(tab.id) { recordedURLs[tab.id, default: []].append(state.url) }
         print("STATE \(tab.id): \(state.url?.absoluteString ?? "-") loading=\(state.isLoading) progress=\(state.progress) title=\(state.title) error=\(state.errorMessage ?? "-")")
     }
-    func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) {}
+    func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) { faviconEvents[tab.id, default: []].append(image) }
     func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) { popups += 1 }
     func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) {}
-    func engineTabDidRequestClose(_ tab: EngineTab) { tab.close() }
     func engineTab(_ tab: EngineTab, requestsExternalURL url: URL) { externalURLs.append(url) }
+    func engineTabDidRequestClose(_ tab: EngineTab) { closeRequests.append(tab.id); tab.close() }
+}
+
+extension Smoke: EngineTabHealthEvents {
+    func engineTab(_ tab: EngineTab, healthDidChange health: EngineTabHealth) {
+        print("HEALTH \(tab.id): \(health)")
+        healthEvents.append((tab.id, health))
+    }
+}
+
+extension EngineTabHealth {
+    var isCrash: Bool { if case .crashed = self { true } else { false } }
+    var isStall: Bool { if case .navigationStalled = self { true } else { false } }
 }
 
 MainActor.assumeIsolated {

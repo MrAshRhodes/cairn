@@ -26,6 +26,28 @@ private final class TestEngine: BrowserEngine {
 }
 
 @MainActor
+private final class SiteDataTestEngine: BrowserEngine, EngineSiteDataManaging {
+    let kind = EngineKind.chromium
+    let displayName = "Site data engine"
+    let versionDescription = "Test 1"
+    var cleared: [(profile: String, site: String?, kinds: SiteDataKinds)] = []
+    var failures: [String] = []
+    var blocking: ContentBlockingConfiguration?
+    var orphanCalls: [Set<String>] = []
+    let blockedRequestCount = 7
+    func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab { TestTab() }
+    func clearBrowsingData(profileID: String, kinds: Set<BrowsingDataKind>) async {}
+    func shutdown() {}
+    func clearSiteData(profileID: String, site: String?, kinds: SiteDataKinds) async -> SiteDataClearResult {
+        cleared.append((profileID, site, kinds))
+        return SiteDataClearResult(failures: failures)
+    }
+    func deleteProfileData(profileID: String) async {}
+    func removeOrphanProfiles(keeping profileIDs: Set<String>) -> [String] { orphanCalls.append(profileIDs); return [] }
+    func configureContentBlocking(_ configuration: ContentBlockingConfiguration) { blocking = configuration }
+}
+
+@MainActor
 private final class TestTab: EngineTab {
     let id = UUID()
     let view = NSView()
@@ -214,6 +236,45 @@ struct BrowserServicesTests {
         #expect(!services.privacyBusy)
         services.shutdown()
         #expect(engine.stopped)
+    }
+
+    @Test func clearingASpaceAndSiteUsesTheFineGrainedEngineAPI() async {
+        let engine = SiteDataTestEngine()
+        let work = Space(name: "Work", profileID: "work")
+        let model = BrowserModel(engine: engine, workspace: Workspace(spaces: [work, Space(name: "Home", profileID: "home")]))
+        let services = BrowserServices(model: model)
+        await services.clearSiteData(kinds: [.cookies, .storage], site: "example.com", spaceIDs: [work.id])
+        #expect(engine.cleared.count == 1)
+        #expect(engine.cleared[0].profile == "work" && engine.cleared[0].site == "example.com")
+        #expect(engine.cleared[0].kinds == [.cookies, .storage])
+        #expect(services.siteDataNotice == nil && !services.privacyBusy)
+
+        engine.failures = ["partial"]
+        await services.clearSiteData()
+        #expect(Set(engine.cleared.dropFirst().map(\.profile)) == ["work", "home"])
+        #expect(services.siteDataNotice == "partial")
+        #expect(services.issues.isEmpty)
+    }
+
+    @Test func orphanCollectionKeepsEverySpaceProfileAndNeedsAReadableWorkspace() {
+        let engine = SiteDataTestEngine()
+        let model = BrowserModel(engine: engine, workspace: Workspace(spaces: [
+            Space(name: "Work", profileID: "work"), Space(name: "Home", profileID: "home")]))
+        let services = BrowserServices(model: model)
+        services.removeOrphanProfiles()
+        #expect(engine.orphanCalls == [["work", "home"]])
+    }
+
+    @Test func contentBlockingConfigurationReachesTheEngine() throws {
+        let engine = SiteDataTestEngine()
+        let services = BrowserServices(model: BrowserModel(engine: engine))
+        services.contentBlocking.onChange = { services.contentBlockingDidChange() }
+        try services.contentBlocking.importList("ads.example.com", name: "list.txt")
+        services.contentBlocking.setEnabled(true)
+        services.contentBlocking.setBlocking(false, on: "news.example.com")
+        #expect(engine.blocking == ContentBlockingConfiguration(
+            isEnabled: true, blockedHosts: ["ads.example.com"], exemptSites: ["news.example.com"]))
+        #expect(services.blockedRequestCount == 7)
     }
 
     @Test func errorsAreVisibleAndDeduplicated() {

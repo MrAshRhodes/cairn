@@ -18,24 +18,42 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     let bridge: CCChromiumTab
     private let startupError: Error?
     private(set) var closed = false
+    weak var engine: ChromiumEngine?
+    var popupBudget = PopupBudget()
+    /// CEF reports a source view's address without the `view-source:` prefix; remember it so the app keeps the real URL.
+    private var viewSourceURL: URL?
     var view: NSView { bridge.view }
-    private(set) var state = EngineTabState()
+    var state = EngineTabState()
     weak var delegate: EngineTabDelegate? {
         didSet { delegate?.engineTab(self, didChange: state) }
     }
     var zoom: Double {
         get { bridge.zoom }
-        set { bridge.zoom = newValue }
+        set {
+            bridge.zoom = newValue
+            (delegate as? EngineTabZoomEvents)?.engineTab(self, zoomDidChange: bridge.zoom)
+        }
     }
 
     init(configuration: EngineConfiguration, error: Error?) {
         profileID = configuration.profileID
+        ChromiumDownloadBridge.shared.remember(profileID: configuration.profileID)
         startupError = error
         bridge = CCChromiumTab(profile: ChromiumEngine.profileDirectory(configuration.profileID),
                                ephemeral: configuration.isEphemeral)
         super.init()
         bridge.delegate = self
         if let error { report(error.localizedDescription) }
+    }
+
+    /// A popup CEF creates for `opener`: same profile and request context, `window.opener` intact.
+    init(popupOf opener: ChromiumTab) {
+        profileID = opener.profileID
+        startupError = nil
+        engine = opener.engine
+        bridge = CCChromiumTab(adoptingPopupFrom: opener.bridge)
+        super.init()
+        bridge.delegate = self
     }
 
     func report(_ message: String) {
@@ -46,11 +64,13 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     }
     func load(_ url: URL) {
         guard !closed, startupError == nil else { return }
-        guard ["https", "http", "about", "file"].contains(url.scheme?.lowercased() ?? "") else {
+        guard ["https", "http", "about", "file"].contains(url.scheme?.lowercased() ?? "") || ViewSource.isViewSource(url) else {
             report("Unsupported URL scheme"); return
         }
+        viewSourceURL = ViewSource.isViewSource(url) ? url : nil
         state.url = url
-        state.isLoading = true
+        // Only a tab that is on screen gets a browser; a detached tab loads once it is attached, so it must not spin.
+        state.isLoading = bridge.view.window != nil
         state.progress = 0
         state.isSecure = false
         state.errorMessage = nil
@@ -83,7 +103,10 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
 
     func chromiumTab(_ tab: CCChromiumTab, changed value: [String: Any]) {
         guard !closed else { return }
-        state = EngineTabState(url: (value["url"] as? String).flatMap(URL.init(string:)),
+        var reported = (value["url"] as? String).flatMap(URL.init(string:))
+        if let viewSourceURL, reported == ViewSource.inner(of: viewSourceURL) { reported = viewSourceURL }
+        else if let reported, reported.absoluteString != "about:blank" { viewSourceURL = nil }
+        state = EngineTabState(url: reported,
                                title: value["title"] as? String ?? "",
                                isLoading: value["isLoading"] as? Bool ?? false,
                                progress: value["progress"] as? Double ?? 0,

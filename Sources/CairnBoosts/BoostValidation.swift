@@ -32,6 +32,18 @@ public extension Boost {
             throw BoostError.invalid("Boost CSS and JavaScript are each limited to 256 KiB.")
         }
         for pattern in hostPatterns { _ = try BoostHostPattern(pattern) }
+        try style?.validate()
+        if let zapped {
+            guard zapped.count <= 200, zapped.allSatisfy(ZapSelector.isSafe) else {
+                throw BoostError.invalid("Zapped elements are limited to 200 safe selectors.")
+            }
+        }
+    }
+
+    /// The visual editor's compiled CSS followed by the hand-written CSS.
+    var effectiveCSS: String {
+        let compiled = BoostCSSCompiler.compile(style: style, zapped: zapped)
+        return compiled.isEmpty ? css : compiled + "\n" + css
     }
 
     /// Matching is scheme- and label-boundary-aware. Invalid patterns never match.

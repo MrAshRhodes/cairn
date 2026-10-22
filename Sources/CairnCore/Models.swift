@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import CairnEngineKit
 
 // FROZEN API (see CairnEngineKit/Engine.swift for the rule). Persistent, Codable value types.
 
@@ -22,16 +23,48 @@ public struct TabItem: Codable, Identifiable, Hashable, Sendable {
     public var homeURL: URL?
     public var createdAt: Date
     public var lastActiveAt: Date
+    /// Pinned tabs only: the folder holding this tab. Missing in older workspaces (the tab is at the top level).
+    public var folderID: UUID?
     public init(id: UUID = UUID(), url: URL? = nil, title: String = "", homeURL: URL? = nil,
                 createdAt: Date = Date(), lastActiveAt: Date = Date()) {
         self.id = id; self.url = url; self.title = title; self.homeURL = homeURL
-        self.customTitle = nil
+        self.customTitle = nil; self.folderID = nil
         self.createdAt = createdAt; self.lastActiveAt = lastActiveAt
     }
     public var displayTitle: String {
         if let customTitle, !customTitle.isEmpty { return customTitle }
         if !title.isEmpty { return title }
         return url?.host ?? "New Tab"
+    }
+}
+
+/// A named group inside a Space's pinned list. Nesting is limited to `maximumDepth` levels.
+public struct TabFolder: Codable, Identifiable, Hashable, Sendable {
+    public static let maximumDepth = 3
+    public static let maximumNameLength = 256
+    public var id: UUID
+    public var name: String
+    public var parentID: UUID?
+    public var collapsed: Bool
+    public init(id: UUID = UUID(), name: String, parentID: UUID? = nil, collapsed: Bool = false) {
+        self.id = id; self.name = name; self.parentID = parentID; self.collapsed = collapsed
+    }
+}
+
+/// A two-colour gradient wash for a Space's sidebar.
+public struct SpaceTheme: Codable, Hashable, Sendable {
+    public var primaryHex: String
+    public var secondaryHex: String
+    /// Degrees, 0...360.
+    public var angle: Double
+    /// 0...1.
+    public var intensity: Double
+    public init(primaryHex: String, secondaryHex: String, angle: Double = 135, intensity: Double = 0.5) {
+        self.primaryHex = primaryHex; self.secondaryHex = secondaryHex; self.angle = angle; self.intensity = intensity
+    }
+    var isValid: Bool {
+        [primaryHex, secondaryHex].allSatisfy { $0.range(of: "^#[0-9a-fA-F]{6}$", options: .regularExpression) != nil }
+            && angle.isFinite && (0...360).contains(angle) && intensity.isFinite && (0...1).contains(intensity)
     }
 }
 
@@ -47,6 +80,10 @@ public struct Space: Codable, Identifiable, Hashable, Sendable {
     public var tabs: [TabItem]
     public var archive: [TabItem]
     public var selectedTabID: UUID?
+    /// Optional additions (older workspaces omit them; older builds ignore them).
+    public var folders: [TabFolder]?
+    public var theme: SpaceTheme?
+    public var pinnedCollapsed: Bool?
     public init(id: UUID = UUID(), name: String, icon: String = "circle.grid.2x2", colorHex: String = "#7C5CFF",
                 profileID: String? = nil, pinned: [TabItem] = [], tabs: [TabItem] = [], archive: [TabItem] = [],
                 selectedTabID: UUID? = nil) {
@@ -57,6 +94,7 @@ public struct Space: Codable, Identifiable, Hashable, Sendable {
 }
 
 public struct Workspace: Codable, Sendable {
+    public static let maximumFavorites = 12
     public static let currentSchemaVersion = 1
     public var schemaVersion: Int
     public var spaces: [Space]
@@ -105,6 +143,7 @@ public enum URLResolver {
     public static func isNavigable(_ url: URL) -> Bool {
         if isWebURL(url) { return true }
         if url.absoluteString == "about:blank" { return true }
+        if let inner = ViewSource.inner(of: url) { return isNavigable(inner) }
         return url.isFileURL && (url.host == nil || url.host == "" || url.host == "localhost")
             && url.path.hasPrefix("/") && !url.path.contains("\0")
     }

@@ -57,6 +57,10 @@ jobs:
           key: cef-archive-${{ matrix.platform }}-${{ hashFiles('engine/cef.lock.json') }}
       - name: Prepare Chromium
         run: make cef
+      # These compile small native fixtures against the prepared CEF headers and wrapper, so they skip in the offline
+      # step above and must run here, on both architectures.
+      - name: Chromium lifecycle regressions
+        run: python3 -m unittest discover -s engine/tests -p 'test_lifecycle.py' -v
       - name: Test
         run: scripts/swiftw test
       # Retries once, and only for the documented teardown-watchdog flake after the success marker. The logs go to a

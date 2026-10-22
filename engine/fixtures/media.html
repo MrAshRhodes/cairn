@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Cairn media fixture</title>
+<link rel="icon" type="image/png" href="/icon.png">
+<button id="go" style="position:fixed;left:20px;top:20px;width:200px;height:80px">Start audio</button>
+<script>
+  window.pip = { supported: document.pictureInPictureEnabled === true, result: "pending" };
+  document.getElementById("go").addEventListener("click", async () => {
+    const context = new AudioContext();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    gain.gain.value = 0.2;
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start();
+    window.tone = { context, oscillator };
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = canvas.height = 64;
+      canvas.getContext("2d").fillRect(0, 0, 64, 64);
+      const video = document.createElement("video");
+      video.muted = true;
+      video.srcObject = canvas.captureStream(5);
+      document.body.append(video);
+      await video.play();
+      await video.requestPictureInPicture();
+      window.pip.result = "entered";
+      await document.exitPictureInPicture();
+    } catch (error) { window.pip.result = error.name + ": " + error.message; }
+  });
+  window.stopTone = () => { window.tone.oscillator.stop(); return true; };
+</script>
+</html>

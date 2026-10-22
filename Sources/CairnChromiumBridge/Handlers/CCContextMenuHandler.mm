@@ -181,6 +181,8 @@ class ContextMenuHandler final : public TabHandler, public CefContextMenuHandler
       case kOpenLinkTab: [tab.delegate chromiumTab:tab popup:link activate:YES]; return true;
       case kOpenLinkBackground: [tab.delegate chromiumTab:tab popup:link activate:NO]; return true;
       case kCopyLink: CopyText(link); return true;
+      // Save through this browser's authenticated CEF context and the native download controller,
+      // never the separate URL-only downloader used for manually pasted addresses.
       case kDownloadLink: browser->GetHost()->StartDownload(params->GetLinkUrl()); return true;
       case kOpenImageTab: [tab.delegate chromiumTab:tab popup:source activate:YES]; return true;
       case kSaveImage: browser->GetHost()->StartDownload(params->GetSourceUrl()); return true;

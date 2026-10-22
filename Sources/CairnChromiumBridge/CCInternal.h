@@ -4,7 +4,8 @@
 // File map (SwiftPM compiles every .mm below this directory; adding a file needs no manifest edit):
 //   include/CairnChromiumBridge.h  public API for Swift. Additive changes only, each in its own slot.
 //   CCInternal.h                   shared state, helpers, the CCChromiumTab class extension, Client.
-//   CCRuntime.mm                   CEF start/stop, message pump, request contexts, profile clearing.
+//   CCRuntime.mm                   CEF start/stop, message pump, request contexts.
+//   CCRuntime+SiteData.mm          clearing site data, deleting profiles, orphan GC.
 //   CCTab.mm                       CCChromiumTab: navigation, DevTools calls, scripts, find, snapshot.
 //   CCTab+<Feature>.mm             optional per-feature tab commands, written as categories.
 //   CCClient.mm                    Client constructor: the registration list of CEF handler families.
@@ -32,12 +33,15 @@
 #include "include/cef_app.h"
 #include "include/cef_client.h"
 #include "include/cef_devtools_message_observer.h"
+#include "include/cef_unresponsive_process_callback.h"
 
 // The class extension below predates this header (it lived in the .mm) and is not nullability-audited.
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wnullability-completeness"
 
 typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
+
+namespace cc { class Client; }
 
 @interface CCChromiumTab ()
 @property(nonatomic, strong) NSView *view;
@@ -46,6 +50,12 @@ typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
 @property(nonatomic) BOOL ephemeral;
 @property(nonatomic) BOOL closing;
 @property(nonatomic) BOOL pageEnabled;
+@property(nonatomic) BOOL bootFailed;
+@property(nonatomic) NSUInteger bootToken;
+// YES while the document Chromium opened itself (about:blank) is the only one the browser has shown.
+@property(nonatomic) BOOL bootstrapDocument;
+// Set by a renderer crash, cleared (with a healthy report) when the next main-frame load ends.
+@property(nonatomic) BOOL awaitingRecovery;
 @property(nonatomic, copy) NSString *pendingURL;
 @property(nonatomic, copy) NSArray *configuredScripts;
 @property(nonatomic, strong) NSMutableArray<NSString *> *scriptIDs;
@@ -54,6 +64,9 @@ typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, DevToolsReply> *replies;
 @property(nonatomic, copy) void (^findReply)(BOOL);
 @property(nonatomic, copy) NSString *lastFind;
+@property(nonatomic, copy) NSString *emulationLanguage;
+@property(nonatomic, copy) NSString *emulationUserAgent;
+- (void)applyEmulation;
 - (void)ensureBrowser;
 - (void)browserCreated;
 - (void)publish;
@@ -61,9 +74,22 @@ typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
 - (void)received:(int)identifier success:(BOOL)success data:(NSData *)data;
 - (void)cancelReplies:(NSString *)reason;
 - (void)drainNavigation;
+- (void)applyAudioMuted;
+- (void)beginBoot;
+- (void)settleBoot;
+- (void)enablePage:(int)attempt token:(NSUInteger)token;
+- (void)armNavigationWatchdog;
+- (void)disarmNavigationWatchdog;
+- (void)publishHealth:(NSString *)kind detail:(NSString *)detail code:(NSInteger)code;
+- (void)renderProcessTerminated:(NSString *)reason code:(NSInteger)code;
+- (void)renderProcessUnresponsive:(CefRefPtr<CefUnresponsiveProcessCallback>)callback;
+- (void)renderProcessResponsive;
 // The CEF browser, or null until CEF created it. Categories (CCTab+<Feature>.mm) cannot see the
 // tab's ivars, so they reach CEF through this.
 - (CefRefPtr<CefBrowser>)cefBrowser;
+// Popup adoption (CCTab+LifeSpan.mm): the client CEF is handed for a popup, created up front.
+- (void)adoptClient;
+- (CefRefPtr<cc::Client>)adoptedClient;
 @end
 
 namespace cc {
@@ -77,11 +103,24 @@ extern bool stopping;
 extern int pendingBrowsers;
 extern std::map<std::string, CefRefPtr<CefRequestContext>> contexts;
 extern std::map<int, CefRefPtr<Client>> clients;
+// Browsers being created per request-context key; a private context must outlive them.
+extern std::map<std::string, int> creating;
 
 NSString *String(const CefString& value);
 NSError *Failure(NSString *message);
+// CEF allocates a new C++ wrapper on each DLL callback; pointer equality is not browser identity.
+inline bool SameBrowser(const CefRefPtr<CefBrowser>& left, const CefRefPtr<CefBrowser>& right) {
+  return left && right && left->IsSame(right);
+}
 CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral);
 void FinishShutdown();
+NSString *ProfileRoot();
+// CCRuntime+SiteData.mm: deferred deletions at launch, and the per-profile list of visited origins.
+void ApplyPendingProfileWork(NSString *root);
+void LoadTrackedOrigins(NSString *profile);
+void TrackOrigin(const std::string& contextKey, const CefString& url);
+// Drops live download callbacks; defined in Handlers/CCDownloadHandler.mm, called before CefShutdown.
+void ReleaseDownloads();
 
 // One per browser. CEF sees a plain CefClient that hands out one small handler object per family.
 // Handlers are created in CCClient.mm and implemented in Handlers/. The public members are the
@@ -94,6 +133,10 @@ class Client final : public CefClient {
   CefRefPtr<CefRegistration> registration;
   std::string contextKey;
   bool ephemeral;
+  // Set while this browser is counted in `pendingBrowsers`; whoever clears it also decrements the counter.
+  bool creationPending = false;
+  // The creation timed out; a browser that still appears is closed instead of attached.
+  bool abandoned = false;
   explicit Client(CCChromiumTab *tab);
 
   CefRefPtr<CefDevToolsMessageObserver> devToolsObserver() { return devTools_; }

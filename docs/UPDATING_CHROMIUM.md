@@ -155,6 +155,53 @@ requests cannot bypass checks or start duplicate teardown. Every app build insta
 this hook. Explicit tab/app close currently forces close (beforeunload cancellation
 is not supported).
 
+Quitting is bounded. If browsers have not all closed (or a browser creation is still
+pending) 4 s after the hook starts, the bridge logs their counts and retries closing.
+It never discards live browsers or pending-creation bookkeeping to call `CefShutdown`.
+A watchdog on a background queue terminates with **exit status 1**, an explicit unclean
+shutdown diagnostic, and no success completion after 10 s if closing, creation or
+`CefShutdown` itself stops making progress. This last resort can lose Chromium writes;
+it is a failure, not evidence of a clean profile flush. Pending download destination
+callbacks and page prompts are cancelled before teardown.
+A browser whose creation is not confirmed within 20 s is abandoned and the tab reports an error.
+Lifecycle regressions can be run without launching Chromium:
+`scripts/swiftw test --filter 'TabPromptTests|SitePermissionStoreTests'` and
+`python3 -m unittest discover -s engine/tests -p test_lifecycle.py -v`.
+The latter includes source-contract guards, a native pending-callback registry test and
+real CEF DLL-wrapper identity checks (requires the already-prepared CEF headers/wrapper;
+it never fetches or initializes CEF). Browser callbacks carry fresh C++ wrapper objects:
+use `CefBrowser::IsSame`, never pointer equality, to associate them with a tab.
+Real multi-tab/popup/DevTools close, active-download quit and blocked-main-thread shutdown
+still require bundled-engine smoke/manual verification; these unit checks do not prove a
+profile flush or the native timeout path.
+
+## Tab health and recovery
+
+The bridge reports process-level problems through the optional `EngineTabHealthEvents`
+protocol (`Sources/CairnEngineKit/EngineTabEvents+Health.swift`): a crashed, killed or
+out-of-memory renderer, an unresponsive renderer (terminated after 10 s if it does not
+recover), a stalled navigation and unavailable page automation. `BrowserModel`
+(`BrowserModel+Recovery.swift`) reloads a visible tab after its first crash in 60 s,
+shows a banner with a Reload action after the second, and stops reloading by itself from
+the third; a background tab is reloaded when selected. The DevTools session, including
+`Page.enable` and user scripts, survives a renderer crash (verified by the smoke test), but
+Page.enable cannot be re-sent until a navigation has revived the renderer, so recovery
+reloads first.
+
+A navigation that makes no progress for 30 s (`CAIRN_NAVIGATION_WATCHDOG_SECONDS` shortens
+it for tests) reports "stalled". The most common cause on a Mac that already holds a
+`Chromium Safe Storage` Keychain item created by a different signer (another Chromium-based
+app or an earlier ad-hoc Cairn build) is a pending Keychain authorization prompt: Chromium
+reads that item to open the cookie store, and no page loads until the prompt is answered.
+Answer it with **Always Allow**; every freshly ad-hoc-signed developer build prompts again.
+Cairn must not use `--use-mock-keychain` outside the smoke test.
+
+A second Cairn process on the same data folder exits quietly with CEF's exit code
+(21 or 24); the running instance is activated through `OnAlreadyRunningAppRelaunch`.
+The data folder is resolved through symlinks once at startup (CEF otherwise silently uses an
+in-memory profile for every Space), and a persistent Space whose profile directory CEF
+rejects refuses to load instead of losing data.
+
 ## Profiles and supported operations
 
 Persistent Space data resides at:
@@ -182,19 +229,51 @@ responsible for per-site guards. Snapshot/find require a mounted, ready browser.
 
 Explicit limitations, not silent claims of support:
 
-* Favicons are not yet fetched. There is no CEF permission/authentication UI,
-  extension/DRM integration, DevTools frontend, PDF export or native printing API.
+* Favicons are not yet fetched. There is no extension/DRM integration, DevTools
+  frontend, PDF export or native printing API.
+* Page prompts are client-implemented (`CCPermissionHandler.mm`, `CCJSDialogHandler.mm`,
+  `GetAuthCredentials`/`OnCertificateError` in `CCRequestHandler.mm`) and shown as cards on
+  the tab that raised them. Site permissions are denied unless allowed; decisions are
+  remembered per Space and origin in `permissions.json` and managed under Settings →
+  Permissions. HTTP auth needs `--disable-chrome-login-prompt` (set in `CCRuntime.mm`);
+  credentials are never stored. Auth requests arrive on CEF's IO thread and are marshalled
+  to the main thread, rejecting requests queued across a navigation. Main-frame navigation
+  (including reload), renderer termination and browser close cancel outstanding auth,
+  JavaScript and permission callbacks and dismiss their cards. Opaque per-instance request
+  IDs and front-of-queue/type checks prevent stale cards answering a new page's prompt.
+  Certificate errors are always refused and explained, with no
+  proceed option. Not done: screen capture (denied), `beforeunload` on tab/app close (close
+  still forces), Chromium-side permission storage.
 * CEF's own downloads are cancelled and URLs are delegated to Cairn. Transferring
   authenticated CEF cookies to a separate downloader is not implemented.
-* Unsolicited popups are blocked; only HTTP(S) user-gesture popup requests become
-  app-managed tabs. Popup opener relationships and named-window reuse are not
-  retained.
-* Cookies and HTTP cache can be cleared per persistent Space. All-origin local
-  storage deletion while running is **unsupported**: requesting it sets
-  `lastDataRemovalError`, a visible tab error and a diagnostic. Quit Cairn before
-  removing that Space's hashed directory; that removes **all** its Chromium
-  cookies/cache/storage too. The frozen engine protocol has no throwing deletion
-  result, so callers should present this limitation.
+* Website data can be cleared per Space, per site and per kind (Preferences ▸ Privacy). CEF has no
+  "clear browsing data" call, so clearing is layered: cookies, HTTP cache and HTTP-auth credentials
+  through CEF; localStorage, IndexedDB, Cache Storage, service workers, File System and WebSQL
+  through DevTools `Storage.clearDataForOrigin` on every http(s) origin the profile navigated to
+  (recorded in `<profile>/cairn-origins.json`, because DevTools cannot enumerate origins; a hidden
+  browser is borrowed when the Space has no open tab). Chromium cannot clear the cache per site, so
+  a per-site clear with "Cache" selected clears the whole Space's cache. A profile that predates
+  origin tracking also gets a one-time deletion of its storage directories at the next launch
+  (reported in Preferences). Partitioned third-party storage keys are not enumerated; deleting the
+  Space is the guaranteed erase.
+* Removing a Space deletes its profile directory (`<hash>.delete` marker first, honoured at the next
+  launch if Chromium still holds files). At startup Cairn also deletes profile directories no Space
+  references, only when the saved workspace was read successfully.
+* Persistent Spaces keep session cookies across relaunches (`persist_session_cookies`); private
+  contexts stay in memory and are discarded after their last tab closes.
+* Content blocking uses only a local, user-imported blocklist (hosts file, plain hosts or `||host^`
+  rules; nothing is fetched). It cancels third-party subresource and sub-frame requests to listed
+  hosts, never main-frame navigations, with a per-site exemption. Cosmetic filtering, HTTPS
+  upgrades and regex rules are not implemented.
+* Popups: a user-gesture `window.open`/`target=_blank` to HTTP(S) or an empty URL is created by CEF in
+  the opener's request context (an ephemeral opener gives an ephemeral popup) with `window.opener`,
+  `postMessage` and named windows intact, and shown as a new tab in the opener's Space; `window.close()`
+  from the popup closes only that tab. Popups without a user gesture, with another scheme, or beyond
+  3 per 10 seconds per tab are blocked and counted in a banner on the opener. Chromium's own blocker is
+  disabled (`disable-popup-blocking`) so every attempt reaches `OnBeforePopup`; the decision lives in
+  `PopupPolicy`. Middle/Cmd-click arrive through `OnOpenURLFromTab` as new tabs. Popup size/position
+  features are ignored, a popup's first document is not covered by Boost scripts (CEF starts its
+  navigation before Cairn can register scripts), and there is no per-site "always allow".
 * Signing/notarization, renderer sandbox behavior, certificate failures, private
   browsing, permissions and both CPU architectures require real-device release
   validation. Compilation is not a claim that those release gates passed.
@@ -251,9 +330,10 @@ For hardened signing:
 
 * **Renderer and GPU helpers:** `engine/entitlements/renderer.plist` (`allow-jit`).
 * **Generic, Alerts and Plugin helpers:** `engine/entitlements/helper.plist`
-  (empty dictionary).
-* **Main app:** the release integrator's minimal app entitlements; capabilities
-  such as camera/microphone require a separate permission/UI/privacy review.
+  (camera and microphone only: capture runs in these processes).
+* **Main app:** the release integrator's minimal app entitlements (camera,
+  microphone, location). They are reviewed: every site request goes through
+  `CCPermissionHandler.mm` and is denied unless the user allows it.
 * Libraries do not receive process JIT entitlements.
 
 Do not add `disable-library-validation`, `allow-unsigned-executable-memory`, or
@@ -309,7 +389,9 @@ python3 engine/smoke.py --development-ad-hoc
 
 The smoke test actually embeds the child view, loads local pages, evaluates JS,
 installs/removes scripts, finds text, changes zoom, takes a snapshot, checks Space
-and private isolation, clears cookies, blocks unsolicited popups and closes CEF.
+and private isolation, clears cookies, blocks unsolicited popups, checks popup adoption (`window.opener`,
+`postMessage`, shared/ephemeral context, `window.close()`, empty-URL and `rel=noopener` popups, flood budget)
+and closes CEF.
 It also verifies CSS grid, container queries, `:has()`, JavaScript modules, fetch,
 the network user agent's locked Chromium version, DOM events, viewport resizing
 and the captured compositor image dimensions.

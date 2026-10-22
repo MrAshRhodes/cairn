@@ -158,5 +158,5 @@ public final class ModuleRegistry {
 
 @MainActor
 public enum BuiltinModules {
-    public static func all() -> [CairnModule] { [BrowserCommandsModule()] }
+    public static func all() -> [CairnModule] { [BrowserCommandsModule(), MediaModule()] }
 }
