@@ -18,6 +18,8 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     let bridge: CCChromiumTab
     private let startupError: Error?
     private(set) var closed = false
+    /// CEF reports a source view's address without the `view-source:` prefix; remember it so the app keeps the real URL.
+    private var viewSourceURL: URL?
     var view: NSView { bridge.view }
     private(set) var state = EngineTabState()
     weak var delegate: EngineTabDelegate? {
@@ -52,6 +54,7 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
         guard ["https", "http", "about", "file"].contains(url.scheme?.lowercased() ?? "") || ViewSource.isViewSource(url) else {
             report("Unsupported URL scheme"); return
         }
+        viewSourceURL = ViewSource.isViewSource(url) ? url : nil
         state.url = url
         state.isLoading = true
         state.progress = 0
@@ -86,7 +89,10 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
 
     func chromiumTab(_ tab: CCChromiumTab, changed value: [String: Any]) {
         guard !closed else { return }
-        state = EngineTabState(url: (value["url"] as? String).flatMap(URL.init(string:)),
+        var reported = (value["url"] as? String).flatMap(URL.init(string:))
+        if let viewSourceURL, reported == ViewSource.inner(of: viewSourceURL) { reported = viewSourceURL }
+        else if let reported, reported.absoluteString != "about:blank" { viewSourceURL = nil }
+        state = EngineTabState(url: reported,
                                title: value["title"] as? String ?? "",
                                isLoading: value["isLoading"] as? Bool ?? false,
                                progress: value["progress"] as? Double ?? 0,

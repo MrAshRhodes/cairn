@@ -1,15 +1,11 @@
 // CCTab+PageTools.mm — DevTools window and per-tab Accept-Language / User-Agent emulation.
 //
-// DevTools opens in CEF's own window and is not a Cairn tab. It gets a fresh minimal client: the inspected
-// tab's Client holds a single `browser`. `remote_debugging_port` stays unset on purpose; it would expose every
-// Space's cookies on a local socket.
+// DevTools: CEF 154 opens it as its own Chrome-style window (a DevToolsWindow), not a Cairn tab, and ignores the
+// client argument there. Passing runtime_style ALLOY or a SetAsChild parent is rejected ("Alloy style is not
+// supported for this browser"), so the window info stays empty. `remote_debugging_port` stays unset on purpose;
+// it would expose every Space's cookies on a local socket. CloseDevTools is asynchronous: reopening before the
+// window has finished closing only focuses it.
 #import "CCInternal.h"
-
-namespace {
-class DevToolsClient final : public CefClient {
-  IMPLEMENT_REFCOUNTING(DevToolsClient);
-};
-}
 
 @implementation CCChromiumTab (DevTools)
 - (BOOL)hasDevTools {
@@ -20,11 +16,8 @@ class DevToolsClient final : public CefClient {
 - (void)showDevToolsInspectingPoint:(NSPoint)point {
   auto browser = self.cefBrowser;
   if (!browser || self.closing) return;
-  CefWindowInfo window;
-  window.runtime_style = CEF_RUNTIME_STYLE_ALLOY;
-  CefBrowserSettings settings;
   CefPoint inspect = point.x == NSNotFound ? CefPoint() : CefPoint((int)point.x, (int)point.y);
-  browser->GetHost()->ShowDevTools(window, new DevToolsClient(), settings, inspect);
+  browser->GetHost()->ShowDevTools(CefWindowInfo(), nullptr, CefBrowserSettings(), inspect);
 }
 - (void)closeDevTools {
   auto browser = self.cefBrowser;

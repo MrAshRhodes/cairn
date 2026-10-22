@@ -50,6 +50,31 @@ failed TLS must never be bypassed to make navigation work.
 Keyboard operation and accessibility labels are part of the interface, not
 optional alternatives to pointer input.
 
+### Page tools
+
+Commands (command bar; menus bind them): *Toggle Developer Tools* (⌥⌘I), *View
+Page Source* (⌥⌘U), *Print…* (⌘P), *Save Page as PDF…* and *Reset Zoom for All Sites*.
+
+- **DevTools** opens in Chromium's own window (CEF 154 only supports its Chrome-style
+  window; an Alloy child view is rejected). It is never a Cairn tab. The remote
+  debugging port stays disabled. Closing is asynchronous: reopening before the window
+  has finished closing only focuses it. `inspectElement(at:)` is the hook for a
+  context-menu *Inspect*.
+- **View source** opens a new tab on `view-source:<page>` in the same Space. Only the
+  browser can open it (typed addresses and page links cannot); only http(s)/file pages.
+- **Print** shows the system print panel (Save as PDF is its PDF menu). **Save Page as
+  PDF** uses `PrintToPDF` (backgrounds, tagged PDF, `@page` size honored).
+- **PDF viewing**: PDFs load in Chromium's built-in viewer (verified by smoke with a local
+  PDF: `application/pdf`, document title). Toolbar interaction is not smoke-tested.
+- **Zoom** is remembered per Space profile and host in `site-zoom.json` (factor 1
+  removes the entry). It follows navigation between hosts and survives relaunch.
+  Unreadable files are kept untouched; the session then runs without persistence.
+- **Language and user agent** (Settings ▸ General): `Accept-Language` and
+  `navigator.languages` default to the system language list; an optional user agent
+  string overrides Chromium's (advanced: client hints are dropped with it). Both are
+  applied through DevTools emulation before a tab's first load and to open tabs on
+  their next navigation. The Chromium UI language (`CefSettings.locale`) is unchanged.
+
 ## Local customization
 
 Swift modules contribute commands through an explicit registry. Declarative
