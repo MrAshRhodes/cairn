@@ -87,4 +87,10 @@ NS_ASSUME_NONNULL_BEGIN
 
 // [ResourceRequest]
 
+// [Testing]
+// Test harnesses only: crashes this tab's renderer to exercise recovery.
+@interface CCChromiumTab (Testing)
+- (void)crashRendererForTesting;
+@end
+
 NS_ASSUME_NONNULL_END

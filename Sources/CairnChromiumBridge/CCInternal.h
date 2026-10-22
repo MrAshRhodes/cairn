@@ -51,7 +51,6 @@ typedef void (^DevToolsReply)(NSDictionary *_Nullable, NSError *_Nullable);
 @property(nonatomic) NSUInteger bootToken;
 // YES while the document Chromium opened itself (about:blank) is the only one the browser has shown.
 @property(nonatomic) BOOL bootstrapDocument;
-@property(nonatomic) BOOL renderProcessGone;
 // Set by a renderer crash, cleared (with a healthy report) when the next main-frame load ends.
 @property(nonatomic) BOOL awaitingRecovery;
 @property(nonatomic, copy) NSString *pendingURL;

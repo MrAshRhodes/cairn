@@ -7,6 +7,15 @@
 
 using namespace cc;
 
+namespace {
+// The 30 s default can be shortened (never below 1 s) so the smoke test can exercise the watchdog quickly.
+NSTimeInterval NavigationWatchdogSeconds() {
+  const char *override = getenv("CAIRN_NAVIGATION_WATCHDOG_SECONDS");
+  double seconds = override ? atof(override) : 0;
+  return seconds >= 1 ? seconds : 30;
+}
+}
+
 @interface CCContainerView : NSView
 @property(nonatomic, weak) CCChromiumTab *owner;
 @end
@@ -103,7 +112,6 @@ using namespace cc;
 // final failure or supersession), so a failed boot can never leave the tab unable to navigate.
 - (void)beginBoot {
   self.bootFailed = NO;
-  self.renderProcessGone = NO;
   self.pageEnabled = NO;
   NSUInteger token = ++self.bootToken;
   self.scriptOperations++;
@@ -116,7 +124,7 @@ using namespace cc;
   __weak CCChromiumTab *weakSelf = self;
   [self call:@"Page.enable" params:@{} reply:^(NSDictionary *, NSError *error) {
     auto tab = weakSelf;
-    if (!tab) return;
+      if (!tab) return;
     if (tab.bootToken != token || tab.closing) { [tab settleBoot]; [tab drainNavigation]; return; }
     if (!error) {
       tab.pageEnabled = YES;
@@ -154,7 +162,9 @@ using namespace cc;
   // The address bar shows the requested URL until the navigation commits.
   self.state[@"url"] = url;
   if ([url isEqualToString:@"about:blank"]) self.bootstrapDocument = NO;
-  if ((self.bootFailed || self.renderProcessGone) && _client && _client->browser && !self.closing) [self beginBoot];
+  // A renderer crash needs no boot: the DevTools session (Page.enable, user scripts) survives it, and Page.enable
+  // cannot be re-sent until a navigation has revived the renderer.
+  if (self.bootFailed && _client && _client->browser && !self.closing) [self beginBoot];
   [self ensureBrowser];
   [self drainNavigation];
 }
@@ -168,12 +178,13 @@ using namespace cc;
 - (void)armNavigationWatchdog {
   NSUInteger token = ++_navigationToken;
   __weak CCChromiumTab *weakSelf = self;
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(NavigationWatchdogSeconds() * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
     CCChromiumTab *tab = weakSelf;
-    if (!tab || tab->_navigationToken != token || tab.closing || tab.renderProcessGone) return;
+    if (!tab || tab->_navigationToken != token || tab.closing) return;
     tab->_navigationStalled = YES;
     [tab publishHealth:@"navigationStalled"
-                detail:@"This page has not started loading after 30 seconds. If macOS asks whether Cairn may use "
+                detail:@"This page has not started loading yet. If macOS asks whether Cairn may use "
                        @"\"Chromium Safe Storage\" in your Keychain, choose Always Allow, then retry. Otherwise "
                        @"check your network connection."
                   code:0];
@@ -186,13 +197,7 @@ using namespace cc;
   [self publishHealth:@"healthy" detail:@"" code:0];
 }
 - (void)renderProcessTerminated:(NSString *)reason code:(NSInteger)code {
-  self.renderProcessGone = YES;
   self.awaitingRecovery = YES;
-  self.pageEnabled = NO;
-  ++self.bootToken;
-  // The DevTools session died with the renderer: its script registrations are gone, so drop the ids instead of removing them.
-  ++self.scriptGeneration;
-  [self.scriptIDs removeAllObjects];
   ++_unresponsiveToken; _unresponsiveCallback = nullptr;
   ++_navigationToken; _navigationStalled = NO;
   self.state[@"isLoading"] = @NO;
@@ -223,7 +228,6 @@ using namespace cc;
   if (!_client) { [self ensureBrowser]; return; }
   if (!_client->browser) return;
   NSString *url = self.state[@"url"];
-  if ((self.bootFailed || self.renderProcessGone) && url.length && !self.bootstrapDocument) { [self loadURL:url]; return; }
   [self armNavigationWatchdog];
   if (ignoringCache) _client->browser->ReloadIgnoreCache(); else _client->browser->Reload();
 }

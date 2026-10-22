@@ -15,6 +15,11 @@ public enum ChromiumEngineModule {
         registry.register(.chromium) { ChromiumEngine() }
     }
 
+    /// Test harnesses only: crashes the tab's renderer process to exercise crash recovery.
+    @MainActor public static func crashRendererForTesting(_ tab: EngineTab) {
+        (tab as? ChromiumTab)?.bridge.crashRendererForTesting()
+    }
+
     /// Invoke only after the app delegate's save/discard checks have approved quitting.
     @MainActor public static func prepareForTermination(completion: @escaping @MainActor () -> Void) {
         CCChromiumRuntime.shutdown {

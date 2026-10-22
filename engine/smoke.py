@@ -6,10 +6,12 @@ import json
 import os
 import pathlib
 import platform
+import re
 import plistlib
 import shutil
 import subprocess
 import threading
+import time
 import uuid
 
 from bundle import FRAMEWORK, HELPERS, bundle
@@ -22,6 +24,9 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         if self.path == "/probe.json":
             body = json.dumps({"userAgent": self.headers.get("User-Agent", "")}).encode()
             content_type = "application/json"
+        elif self.path == "/hang":
+            time.sleep(6)  # outlasts the shortened navigation watchdog without blocking server shutdown for long
+            body = b"late"
         else:
             body = (ROOT / "engine/fixtures/rendering.html").read_bytes()
         self.send_response(200)
@@ -32,6 +37,17 @@ class Fixture(http.server.BaseHTTPRequestHandler):
 
     def log_message(self, *args):
         pass
+
+
+def check_second_instance(app, env, stdout_log, first):
+    """Starts a second process on the running instance's profile and returns its exit code."""
+    deadline = time.monotonic() + 60
+    while "CAIRN_SMOKE_READY" not in stdout_log.read_text():
+        if first.poll() is not None or time.monotonic() > deadline:
+            return None
+        time.sleep(0.2)
+    second = subprocess.run([str(app / "Contents/MacOS/Cairn")], env=env, cwd=ROOT, capture_output=True, timeout=30)
+    return second.returncode
 
 
 def main():
@@ -80,19 +96,24 @@ def main():
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Fixture)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
-    env["CAIRN_SMOKE_DATA_ROOT"] = str(work / "profiles")
+    # The data root deliberately crosses a symlink: Cairn must resolve it, or CEF demotes every Space to memory.
+    (work / "real").mkdir()
+    (work / "via-link").symlink_to(work / "real")
+    env["CAIRN_SMOKE_DATA_ROOT"] = str(work / "via-link" / "profiles")
     env["CAIRN_SMOKE_SNAPSHOT"] = str(work / "rendering.png")
     env["CAIRN_SMOKE_CHROMIUM_MAJOR"] = json.loads((ROOT / "engine/cef.lock.json").read_text())["chromium_version"].split(".")[0]
+    env["CAIRN_NAVIGATION_WATCHDOG_SECONDS"] = "3"
     env["CAIRN_SMOKE_URL"] = f"http://127.0.0.1:{server.server_port}/"
     print(f"Smoke bundle and diagnostic logs: {work}", flush=True)
     try:
         status = -1
         with (work / "stdout.log").open("w") as stdout, (work / "stderr.log").open("w") as stderr:
+            process = subprocess.Popen([str(app / "Contents/MacOS/Cairn")], env=env, cwd=ROOT, stdout=stdout, stderr=stderr)
             try:
-                run = subprocess.run([str(app / "Contents/MacOS/Cairn")], env=env, cwd=ROOT,
-                                     stdout=stdout, stderr=stderr, timeout=90)
-                status = run.returncode
+                second_instance_exit = check_second_instance(app, env, work / "stdout.log", process)
+                status = process.wait(timeout=90)
             except subprocess.TimeoutExpired:
+                process.kill()
                 print("CEF process exceeded 90 seconds; terminated.", flush=True)
         output = (work / "stdout.log").read_text()
         errors = (work / "stderr.log").read_text()
@@ -100,6 +121,13 @@ def main():
         print(errors[-12000:])
         if status != 0 or "CAIRN_CEF_SMOKE_OK" not in output or "Check failed:" in errors:
             raise SystemExit(f"Sandbox smoke failed (exit {status}); inspect {work}")
+        if second_instance_exit not in (21, 24):
+            raise SystemExit(f"A second instance on the same profile must exit quietly with 21 or 24, got {second_instance_exit}; inspect {work}")
+        print(f"PASS: second instance on the same profile exits quietly ({second_instance_exit})")
+        shutdown = re.search(r"SHUTDOWN_MS=(\d+)", output)
+        if not shutdown or int(shutdown.group(1)) > 8000:
+            raise SystemExit(f"Shutdown must finish within 8 s, got {shutdown and shutdown.group(1)} ms; inspect {work}")
+        print(f"PASS: shutdown with live tabs finished in {shutdown.group(1)} ms")
     finally:
         server.shutdown()
         server.server_close()
