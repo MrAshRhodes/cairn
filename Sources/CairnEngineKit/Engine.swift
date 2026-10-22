@@ -1,10 +1,10 @@
 import AppKit
 
 // FROZEN API — owned by the parent/integrator. Agents may ADD public API (new files/extensions) but must not
-// rename, remove, or change existing signatures. Both CairnWebKitEngine and the gated Chromium engine implement it.
+// rename, remove, or change existing signatures. CairnChromiumEngine implements it.
 
 public enum EngineKind: String, Codable, Sendable, CaseIterable {
-    case webkit, chromium
+    case chromium
 }
 
 public enum BrowsingDataKind: String, CaseIterable, Sendable {
@@ -86,14 +86,14 @@ public protocol EngineTab: AnyObject {
 public protocol BrowserEngine: AnyObject {
     var kind: EngineKind { get }
     var displayName: String { get }
-    /// Human-readable engine version, e.g. "WebKit 21619" or "Chromium 154.0.8037.98".
+    /// Human-readable engine version, e.g. "Chromium 154.0.8037.98".
     var versionDescription: String { get }
     func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab
     func clearBrowsingData(profileID: String, kinds: Set<BrowsingDataKind>) async
     func shutdown()
 }
 
-/// Engines register a factory at launch; the app picks one by `EngineKind` (user setting).
+/// The engine registers a factory at launch; the app asks for it by `EngineKind`.
 @MainActor
 public final class EngineRegistry {
     public static let shared = EngineRegistry()

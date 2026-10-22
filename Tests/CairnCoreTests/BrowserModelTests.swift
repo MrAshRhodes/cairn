@@ -5,7 +5,7 @@ import Testing
 
 @MainActor
 private final class FakeEngine: BrowserEngine {
-    let kind = EngineKind.webkit
+    let kind = EngineKind.chromium
     let displayName = "Fake"
     let versionDescription = "Test"
     var tabs: [FakeTab] = []

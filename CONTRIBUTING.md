@@ -1,18 +1,21 @@
 # Contributing to Cairn
 
-This guide is for contributors adding a browser feature without coupling it to
-one rendering engine.
+This guide is for contributors adding a browser feature while keeping UI and
+workspace state separate from Chromium implementation details.
 
 Start with the [functional specification](docs/reference/functional-spec.md).
-Build with `make build`, run `make test`, and use `make app` for a bundled app.
+Build with `make build`, run `make test`, and use `make app` (or `make run`) for a
+bundled app. These Chromium targets prepare the pinned CEF dependency
+automatically, including for tests, and need CMake 3.21+ and Python 3.12+.
+Chromium is the only shipped engine; there is no CEF-free build mode.
 Use Swift Testing, not XCTest, so tests also work on a Command Line Tools-only
 installation.
 
 ## Module boundaries
 
 The engine kit defines engine/tab contracts. Core owns workspace state and
-persistence. Engines implement navigation and rendering; they do not own sidebar
-state. The native UI composes Core, modules, Boosts and the updater. Put a new
+persistence. The Chromium engine implements navigation and rendering; it does not
+own sidebar state. The native UI composes Core, modules, Boosts and the updater. Put a new
 command in a module rather than hard-coding another unrelated dependency into
 the window.
 
@@ -36,7 +39,7 @@ for changes to native view or process lifecycles.
 
 ## Submitting a change
 
-Describe the user-visible behavior, affected engine(s), compatibility concerns
+Describe the user-visible behavior, affected modules, compatibility concerns
 and checks performed. Keep changes focused. Document a new command or setting
 where a new user can find it. Do not include browser profiles, cookies, browsing
 history, signing keys, binary analysis dumps or proprietary application assets.

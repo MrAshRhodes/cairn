@@ -1,23 +1,21 @@
 import Foundation
 import Observation
-import CairnEngineKit
 
 @MainActor @Observable
 public final class Settings {
     public var searchTemplate = URLResolver.defaultSearchTemplate
-    public var engineKind: EngineKind
     /// Zero disables automatic archiving.
     public var autoArchiveAfterHours: Double = 12
     public var restoreSessionOnLaunch = true
     public var sidebarWidth: Double = 260
-    public init(engineKind: EngineKind = .webkit) {
-        self.engineKind = engineKind
-    }
+    public init() {}
 
     private struct Document: Codable {
         var schemaVersion = 1
         var searchTemplate: String
-        var engineKind: EngineKind
+        /// Legacy key: v0.1.0 requires it, so it is still written. Chromium is the only engine, so a value
+        /// stored by older builds and the old `engineKindIsExplicit` flag are ignored on load.
+        var engineKind: String? = "chromium"
         var autoArchiveAfterHours: Double
         var restoreSessionOnLaunch: Bool
         var sidebarWidth: Double
@@ -33,12 +31,11 @@ public final class Settings {
         }
     }
 
-    public static func load(from url: URL, defaultEngineKind: EngineKind = .webkit) throws -> Settings {
-        let settings = Settings(engineKind: defaultEngineKind)
+    public static func load(from url: URL) throws -> Settings {
+        let settings = Settings()
         guard let data = try JSONStorage.read(url) else { return settings }
         let document = try decode(data)
         settings.searchTemplate = document.searchTemplate
-        settings.engineKind = document.engineKind
         settings.autoArchiveAfterHours = document.autoArchiveAfterHours
         settings.restoreSessionOnLaunch = document.restoreSessionOnLaunch
         settings.sidebarWidth = document.sidebarWidth
@@ -47,7 +44,7 @@ public final class Settings {
 
     /// Existing invalid/newer data is preserved, even if the caller skipped `load`.
     public func save(to url: URL) throws {
-        let document = Document(searchTemplate: searchTemplate, engineKind: engineKind,
+        let document = Document(searchTemplate: searchTemplate,
                                 autoArchiveAfterHours: autoArchiveAfterHours,
                                 restoreSessionOnLaunch: restoreSessionOnLaunch, sidebarWidth: sidebarWidth)
         try document.validate()

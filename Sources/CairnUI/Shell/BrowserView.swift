@@ -136,7 +136,6 @@ struct BrowserView: View {
         .onChange(of: services.settings.searchTemplate) { _, _ in services.saveSettings() }
         .onChange(of: services.settings.autoArchiveAfterHours) { _, _ in services.saveSettings() }
         .onChange(of: services.settings.restoreSessionOnLaunch) { _, _ in services.saveSettings() }
-        .onChange(of: services.settings.engineKind) { _, _ in services.saveSettings() }
         .onChange(of: services.settings.sidebarWidth) { _, _ in services.saveSettings() }
         .onAppear { address = model.selectedTab?.url?.absoluteString ?? "" }
     }

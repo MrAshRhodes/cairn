@@ -4,7 +4,7 @@ import CairnEngineKit
 import CairnChromiumBridge
 
 public enum ChromiumEngineModule {
-    /// Must precede any access to NSApplication.shared, including WebKit/Sparkle setup.
+    /// Must run before anything touches NSApplication.shared (AppKit, Sparkle) so CEF's application subclass is the one instantiated.
     @MainActor @discardableResult public static func prepareApplication() -> Bool {
         CCChromiumRuntime.prepareApplication()
     }
@@ -70,7 +70,7 @@ public final class ChromiumEngine: BrowserEngine {
     public func shutdown() {
         for tab in tabs.values.compactMap(\.value) { tab.close() }
         tabs.removeAll()
-        // Runtime is process-wide and must survive switching back to WebKit and then Chromium.
+        // The CEF runtime is process-wide and initialized once, so closing tabs here does not shut it down.
         // The approved application-termination hook shuts the runtime down exactly once.
     }
 

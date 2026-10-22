@@ -16,7 +16,7 @@ jobs:
       matrix:
         runner: [macos-15, macos-15-intel]
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -31,9 +31,13 @@ jobs:
         run: |
           actionlint
           scripts/test-release.sh
+      - name: Prepare Chromium
+        run: make cef
       - name: Test
         run: scripts/swiftw test
-      - name: Package ad-hoc app and disk image
+      - name: Check Chromium rendering
+        run: python3 engine/smoke.py --development-ad-hoc
+      - name: Package Chromium app and disk image
         run: |
           scripts/bundle-app.sh
           scripts/make-dmg.sh

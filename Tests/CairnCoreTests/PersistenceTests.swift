@@ -8,15 +8,12 @@ import SQLite3
         let directory = try TestDirectory()
         let file = directory.file("settings.json")
         let settings = try Settings.load(from: file)
-        #expect(settings.engineKind == .webkit)
         #expect(settings.restoreSessionOnLaunch)
         #expect(!FileManager.default.fileExists(atPath: file.path))
-        settings.engineKind = .chromium
         settings.sidebarWidth = 320
         settings.searchTemplate = "https://example.com/search?q=%s&safe=1"
         try settings.save(to: file)
         let loaded = try Settings.load(from: file)
-        #expect(loaded.engineKind == .chromium)
         #expect(loaded.sidebarWidth == 320)
         #expect(loaded.searchTemplate == settings.searchTemplate)
     }
@@ -32,14 +29,62 @@ import SQLite3
         #expect(try Data(contentsOf: file) == data)
     }
 
-    @Test func bundledEngineDefaultDoesNotOverrideAnExplicitPreference() throws {
+    @Test(arguments: [
+        #""engineKind":"webkit","engineKindIsExplicit":true"#,
+        #""engineKind":"webkit","engineKindIsExplicit":false"#,
+        #""engineKind":"webkit""#,
+        #""engineKind":"chromium","engineKindIsExplicit":true"#,
+        #""engineKindIsExplicit":true"#,
+    ])
+    func legacyEngineFieldsAreIgnoredAndOtherSettingsAreKept(engineFields: String) throws {
         let directory = try TestDirectory()
         let file = directory.file("settings.json")
-        let settings = try Settings.load(from: file, defaultEngineKind: .chromium)
-        #expect(settings.engineKind == .chromium)
-        settings.engineKind = .webkit
+        let legacy = """
+        {"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s",\(engineFields),
+        "autoArchiveAfterHours":24,"restoreSessionOnLaunch":false,"sidebarWidth":300}
+        """
+        try Data(legacy.utf8).write(to: file)
+        let settings = try Settings.load(from: file)
+        #expect(settings.searchTemplate == "https://duckduckgo.com/?q=%s")
+        #expect(settings.autoArchiveAfterHours == 24)
+        #expect(!settings.restoreSessionOnLaunch)
+        #expect(settings.sidebarWidth == 300)
+    }
+
+    @Test func legacyEngineSettingsAreRewrittenWithTheEngineKeyOlderReleasesRequire() throws {
+        let directory = try TestDirectory()
+        let file = directory.file("settings.json")
+        let legacy = """
+        {"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s","engineKind":"webkit",
+        "engineKindIsExplicit":true,"autoArchiveAfterHours":24,"restoreSessionOnLaunch":false,"sidebarWidth":300}
+        """
+        try Data(legacy.utf8).write(to: file)
+        let settings = try Settings.load(from: file)
+        settings.sidebarWidth = 320
         try settings.save(to: file)
-        #expect(try Settings.load(from: file, defaultEngineKind: .chromium).engineKind == .webkit)
+
+        let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(saved["schemaVersion"] as? Int == 1)
+        #expect(saved["engineKind"] as? String == "chromium")
+        #expect(saved["engineKindIsExplicit"] == nil)
+        let reloaded = try Settings.load(from: file)
+        #expect(reloaded.searchTemplate == "https://duckduckgo.com/?q=%s")
+        #expect(reloaded.autoArchiveAfterHours == 24)
+        #expect(!reloaded.restoreSessionOnLaunch)
+        #expect(reloaded.sidebarWidth == 320)
+    }
+
+    @Test func newSettingsStillWriteTheLegacyEngineKeyWithoutTheExplicitFlag() throws {
+        let directory = try TestDirectory()
+        let file = directory.file("settings.json")
+        try Settings().save(to: file)
+        let saved = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(saved["engineKind"] as? String == "chromium")
+        #expect(saved["engineKindIsExplicit"] == nil)
+        #expect(Set(saved.keys) == [
+            "schemaVersion", "searchTemplate", "engineKind", "autoArchiveAfterHours",
+            "restoreSessionOnLaunch", "sidebarWidth",
+        ])
     }
 
     @Test func invalidSettingsCannotReplaceGoodData() throws {

@@ -82,21 +82,6 @@ public struct PreferencesView: View {
                     Text("\(Int(settings.sidebarWidth))").font(.caption.monospacedDigit()).frame(width: 32)
                 }
             }
-            Section("Browser engine") {
-                Picker("Engine", selection: $settings.engineKind) {
-                    ForEach(EngineKind.allCases, id: \.self) { kind in
-                        Text(kind == .webkit ? "WebKit" : "Chromium").tag(kind)
-                            .disabled(!services.availableEngines.contains(kind))
-                    }
-                }
-                Text(settings.engineKind == model.engine.kind
-                     ? "Running \(model.engine.displayName) · \(model.engine.versionDescription)"
-                     : "Restart Cairn to use the selected engine. Your open pages keep using \(model.engine.displayName) until then.")
-                    .font(.caption).foregroundStyle(.secondary)
-                if !services.availableEngines.contains(.chromium) {
-                    Text("Chromium is optional and is not included in this build.").font(.caption).foregroundStyle(.secondary)
-                }
-            }
             if !services.settingsWritable {
                 Label("Settings are read-only because their saved file could not be read.", systemImage: "exclamationmark.triangle")
                     .foregroundStyle(.orange)

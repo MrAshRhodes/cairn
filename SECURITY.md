@@ -16,8 +16,10 @@ test pages over a real person's account.
 
 ## Update responsibilities
 
-WebKit security fixes depend on supported Apple system updates. Embedded Chromium
-security fixes depend on the pinned CEF build and a newly published Cairn release.
+Chromium is the only engine in current source builds and future public releases.
+Its security fixes depend on the pinned CEF build and a newly published Cairn release,
+not on installing Google Chrome. The historical v0.1.0 WebKit preview instead
+depends on supported Apple system updates.
 A successful compilation is not evidence of an up-to-date or safely sandboxed
 engine. Stable CEF can lag stable Chrome; the maintenance tooling must surface
 that gap rather than hide it.

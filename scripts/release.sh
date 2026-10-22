@@ -2,17 +2,33 @@
 set +x
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# One architecture per run: Chromium (CEF) is the only engine and is single-architecture, so a public release is
+# two same-version builds (arm64 on Apple silicon, x86_64 on Intel) that scripts/finalize-release.sh signs into
+# one Sparkle feed. Only that script handles the Sparkle private key; this one must never see it.
+unset SPARKLE_PRIVATE_ED_KEY SPARKLE_KEYCHAIN_ACCOUNT
+export VERSION="${VERSION:?Set VERSION to the numeric release version, e.g. 0.1.0}"
+host_arch="$(uname -m)"
+case "$host_arch" in
+  arm64|aarch64) host_arch=arm64 ;;
+  x86_64|amd64) host_arch=x86_64 ;;
+  *) echo "ERROR: unsupported host architecture: $host_arch" >&2; exit 1 ;;
+esac
+export BUILD_NUMBER="${BUILD_NUMBER:-$VERSION}" ARCH="${ARCH:-$host_arch}" CONFIGURATION=release
+export SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
 [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]] || {
   echo "ERROR: release requires SPARKLE_PUBLIC_ED_KEY." >&2; exit 1;
 }
-scripts/sparkle-release-signing.sh validate-input
-if [[ ! -x .build/artifacts/sparkle/Sparkle/bin/sign_update ]]; then
-  scripts/swiftw package resolve
+# Fail before the long test and build steps: valid ARCH/VERSION/public key, and Chromium prepared (never fetched here).
+python3 Resources/ReleaseTools/bundle.py check
+python3 Resources/ReleaseTools/bundle.py engine "$ARCH"
+if [[ "$ARCH" != "$host_arch" ]]; then
+  # The unit tests run natively, so a cross-architecture build still needs the host's Chromium.
+  python3 Resources/ReleaseTools/bundle.py engine "$host_arch"
 fi
-scripts/sparkle-release-signing.sh check-key
-export VERSION="${VERSION:?Set VERSION to the numeric release version, e.g. 0.1.0}"
-export BUILD_NUMBER="${BUILD_NUMBER:-$VERSION}" ARCH="${ARCH:-universal}" CONFIGURATION=release
-export SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+assets="dist/release"
+archive="$assets/Cairn-$VERSION-$ARCH.zip"
+dmg="$assets/Cairn-$VERSION-$ARCH.dmg"
+record="$assets/Cairn-$VERSION-$ARCH.json"
 signing_dir="$PWD/.build/release-signing"
 cleanup() {
   if [[ -n "${imported_keychain:-}" ]]; then
@@ -55,14 +71,12 @@ if [[ ${#notary_args[@]} -gt 0 && "$SIGNING_IDENTITY" == "-" ]]; then
   echo "ERROR: notarization requires a Developer ID signature" >&2; exit 1
 fi
 
-scripts/swiftw test
+mkdir -p "$assets"
+# Keep the other architecture's files; drop this one's previous outputs and anything finalized from them.
+rm -f "$archive" "$dmg" "$record" "$assets"/{appcast.xml,RELEASE-INFO.json,RELEASE-NOTES.txt,SHA256SUMS}
+CAIRN_CEF_ARCH="$host_arch" scripts/swiftw test
 scripts/test-release.sh
 scripts/bundle-app.sh
-assets="dist/release"
-rm -rf "$assets"
-mkdir -p "$assets"
-archive="$assets/Cairn-$VERSION-$ARCH.zip"
-dmg="$assets/Cairn-$VERSION-$ARCH.dmg"
 notarized=false
 if [[ ${#notary_args[@]} -gt 0 ]]; then
   ditto -c -k --sequesterRsrc --keepParent dist/Cairn.app .build/notarization.zip
@@ -83,21 +97,7 @@ if [[ "$notarized" == true ]]; then
   xcrun stapler staple "$dmg"
   xcrun stapler validate "$dmg"
 fi
-scripts/make-appcast.sh "$archive" dist/Cairn.app "$assets/appcast.xml"
-export CAIRN_NOTARIZED="$notarized"
-python3 - <<'PY'
-import json, os, pathlib
-mode = "ad-hoc" if os.environ["SIGNING_IDENTITY"] == "-" else "Developer ID"
-record = dict(version=os.environ["VERSION"], build=os.environ["BUILD_NUMBER"],
-              architecture=os.environ["ARCH"], signing=mode,
-              notarized=os.environ["CAIRN_NOTARIZED"] == "true", sparkle="Ed25519 archive and feed")
-pathlib.Path("dist/release/RELEASE-INFO.json").write_text(json.dumps(record, indent=2) + "\n")
-notice = "Notarized by Apple." if record["notarized"] else "NOT notarized by Apple."
-pathlib.Path("dist/release/RELEASE-NOTES.txt").write_text(
-    f"Cairn {record['version']} ({record['architecture']})\n\n"
-    f"Apple signing: {mode}. {notice}\n"
-    "The ZIP and appcast have verified Sparkle Ed25519 signatures.\n"
-    "Ad-hoc builds have no Apple Gatekeeper trust. Prefer a Developer ID notarized release for distribution.\n")
-PY
-(cd "$assets" && shasum -a 256 ./*.zip ./*.dmg appcast.xml RELEASE-INFO.json RELEASE-NOTES.txt > SHA256SUMS)
-echo "Release assets prepared in $assets; nothing has been published."
+python3 Resources/ReleaseTools/ReleaseAssets.py record --app dist/Cairn.app --zip "$archive" --dmg "$dmg" \
+  --notarized "$notarized" --output "$record"
+echo "Release assets for $ARCH prepared in $assets; nothing has been signed for Sparkle or published."
+echo "Build the other architecture, then run scripts/finalize-release.sh to sign the shared update feed."

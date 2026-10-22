@@ -1,3 +1,7 @@
+#if !__has_include("include/cef_version.h") || !__has_include("libcef_dll_wrapper/libcef_dll_wrapper.a")
+#error "Chromium (CEF) is not prepared for this build. Run `make cef` (python3 engine/tool.py fetch && python3 engine/tool.py build) first; when CAIRN_CEF_ARCH selects a non-host architecture, add --arch <arm64|x86_64> to both commands."
+#endif
+
 #import "CairnChromiumBridge.h"
 #import <crt_externs.h>
 #include <algorithm>
@@ -340,7 +344,7 @@ class CookiesDone final : public CefDeleteCookiesCallback {
   if (!running) {
     library.reset();
     terminated = true;
-    if (error) *error = Failure(@"CEF initialization failed (including singleton/profile lock). See cef.log; WebKit remains available.");
+    if (error) *error = Failure(@"CEF initialization failed (including singleton/profile lock). See cef.log.");
     return NO;
   }
   // CEF's external pump needs a bounded idle fallback as well as explicit work

@@ -1,9 +1,15 @@
 # Chromium / CEF engine
 
-**`make app` builds the experimental Chromium app; published v0.1.0 downloads use
-WebKit.** This is not a claim of equivalence to Google Chrome. A normal `scripts/swiftw
-build` neither downloads CEF nor compiles/links its bridge, wrapper or helpers.
-Use `make webkit-app` for a system-WebKit-only application bundle.
+**Chromium is the only engine for source builds and future public releases;
+the historical v0.1.0 download uses WebKit.** This is not a claim of equivalence to
+Google Chrome. `make build`, `make test`, `make app` and `make run` prepare CEF for
+the host architecture (`make cef`, which runs `python3 engine/tool.py fetch` and
+`build`). `scripts/bundle-app.sh` never downloads CEF; run `make cef` first.
+Bare `scripts/swiftw build`/`test` also compile Chromium but do not prepare its
+native dependencies. Package resolution works without CEF; compilation requires
+its headers and wrapper. Always prepare CEF after changing the lock: a bare
+SwiftPM build does not validate the downloaded and built pin markers.
+There is no WebKit target, engine switch or CEF-free build mode.
 Downloaded binaries and build caches stay in ignored `engine/cef/` and
 `engine/.cache/`. No Arc executable, private source, branding or resources are used.
 
@@ -34,6 +40,15 @@ python3 engine/tool.py check
 python3 engine/tool.py check --fail-on-gap
 ```
 
+The Release workflow runs the same fail-closed check before building either
+architecture, including during dry runs. Scheduled and tag-triggered releases
+stop on a gap. A manual run can accept a **confirmed** gap only through the
+`chromium_risk_acknowledgement` input: a reviewed rationale of 20–500 printable
+characters on one line, retained with the gate result and release metadata.
+Unavailable or invalid upstream metadata cannot be overridden. Local
+finalization requires the equivalent gate record; see
+[the release guide](RELEASING.md#check-the-engine-and-authenticate-both-builds).
+
 The scheduled `engine-bump.yml` workflow checks daily and on manual dispatch. It
 compares the locked Chromium version **and** the latest stable CEF against Chrome
 stable, even when no newer CEF archive is available. A remaining gap produces a
@@ -55,19 +70,20 @@ full Xcode; the supplied Makefiles path also compiles with the verified macOS 26
 CLT-only Swift 6.4 environment. Ninja is not required.
 
 ```sh
-# Select arm64 or x86_64 explicitly, or omit --arch for the host architecture.
+# Host architecture: prepare CEF, build and bundle in one step (`make cef` only prepares CEF):
+make app
+# Or step by step. Select arm64 or x86_64 explicitly, or omit --arch for the host.
 python3 engine/tool.py fetch --arch arm64
 python3 engine/tool.py build --arch arm64
-CAIRN_WITH_CHROMIUM=1 scripts/swiftw build
+scripts/swiftw build
 # Explicit product for release scripts that otherwise build only Cairn:
-CAIRN_WITH_CHROMIUM=1 scripts/swiftw build --product CairnHelper
-# Or build and package both matching products:
-make app
+scripts/swiftw build --product CairnHelper
 ```
 
-Bundled builds select Chromium for fresh settings when it is registered. Saved
-engine choices take precedence. Existing users can select Chromium in Settings;
-bundling it must not silently migrate their WebKit preference or browsing data.
+Cairn always uses Chromium. Legacy settings files remain readable, but their
+engine preference is ignored, including explicit WebKit selections. Other
+preferences are preserved. Website cookies and storage are not migrated from
+historical WebKit profiles.
 The bundler builds the main app and helper with the same architecture/configuration
 and passes the resolved helper path, rather than assuming SwiftPM's generic debug path.
 
@@ -84,7 +100,7 @@ Updating the lock invalidates the extracted pin marker and wrapper build marker.
 The build command removes its old wrapper build directory when the pin changes.
 CEF is loaded at runtime via its wrapper, not linked directly as a framework; this
 is required for the macOS subprocess sandbox. The wrapper and bridge select
-versioned CEF API `15400`, with C++20 in the gated Package.swift configuration.
+versioned CEF API `15400`, with C++20 in the package configuration.
 Review/update that API number if a future CEF drops it; a compilation failure is
 preferable to an incompatible binary.
 
@@ -100,19 +116,12 @@ implemented.
 In the app's main entry point, before `NSApplication.shared`, Sparkle, or UI setup:
 
 ```swift
-#if CAIRN_CHROMIUM
 import CairnChromiumEngine
-#endif
 
 MainActor.assumeIsolated {
-    var prepareForTermination: CairnApp.TerminationPreparation?
-    #if CAIRN_CHROMIUM
     precondition(ChromiumEngineModule.prepareApplication())
     ChromiumEngineModule.register(in: EngineRegistry.shared)
-    prepareForTermination = ChromiumEngineModule.prepareForTermination
-    #endif
-    // Register WebKit as well, then start the normal Cairn UI:
-    CairnApp.run(prepareForTermination: prepareForTermination)
+    CairnApp.run(prepareForTermination: ChromiumEngineModule.prepareForTermination)
 }
 ```
 
@@ -127,11 +136,11 @@ Request contexts/browser creation are asynchronous. CEF initialization is lazy
 when the Chromium factory is used. Missing framework,
 incorrect application startup ordering, unbundled `swift run`, architecture,
 signing and singleton/profile-lock failures surface as tab initialization errors.
-WebKit remains registered. The app must not retry CEF initialization in-process
+There is no fallback engine. The app must not retry CEF initialization in-process
 after a completed CEF shutdown.
 
 `BrowserEngine.shutdown()` closes that engine's tabs, but preserves the
-process-wide runtime so switching to WebKit and back remains possible. AppKit
+process-wide runtime until application termination. AppKit
 first asks the normal application delegate to approve quitting. Unsaved Boost
 and persistence-failure checks must complete **before** any CEF teardown; Keep
 Editing/Keep Cairn Open leave the browsers and runtime untouched. After approval,
@@ -139,9 +148,9 @@ the optional termination hook returns `terminateLater`, closes all CEF browsers,
 waits for their `OnBeforeClose` notifications, releases request contexts, and calls
 `CefShutdown` outside the CEF callback stack. Only then does the coordinator reply
 to AppKit's pending termination request, exactly once. Repeated/nested quit
-requests cannot bypass checks or start duplicate teardown. The default build
-without this hook still returns `terminateNow` after approval. Explicit tab/app
-close currently forces close (beforeunload cancellation is not supported).
+requests cannot bypass checks or start duplicate teardown. Every app build installs
+this hook. Explicit tab/app close currently forces close (beforeunload cancellation
+is not supported).
 
 ## Profiles and supported operations
 
@@ -266,7 +275,8 @@ python3 engine/tool.py update      # explicit; only latest COMMON STABLE version
 git diff -- engine/cef.lock.json   # manually review both archive pins
 python3 engine/tool.py fetch
 python3 engine/tool.py build
-CAIRN_WITH_CHROMIUM=1 scripts/swiftw build
+scripts/swiftw build
+scripts/swiftw test
 
 # GUI session required. The smoke fixture serves only loopback, using isolated
 # profiles under engine/.cache; it does not touch normal Cairn profiles.
@@ -274,8 +284,6 @@ python3 engine/smoke.py --identity 'Developer ID Application: YOUR IDENTITY'
 # Explicitly weaker local signing, for functional debugging ONLY:
 python3 engine/smoke.py --development-ad-hoc
 
-# Always verify the default WebKit-only build still succeeds:
-scripts/swiftw build
 ```
 
 The smoke test actually embeds the child view, loads local pages, evaluates JS,
@@ -290,7 +298,8 @@ Developer ID/notarization verification, or testing on Intel hardware.
 
 Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
 
-* Default and `CAIRN_WITH_CHROMIUM=1` full Swift builds succeeded.
+* Full Swift builds succeeded for both engine configurations available at that
+  time. Current source builds include Chromium unconditionally.
 * The sandbox-enabled C++ wrapper and helper built with Makefiles, without Ninja.
 * All 16 offline maintenance tests passed; `actionlint` accepted the workflow.
 * The explicitly non-hardened development smoke completed all 22 assertions and
@@ -299,7 +308,7 @@ Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
 * A hardened ad-hoc launch failed at dyld's Team ID validation, as described above.
   No Developer ID signing identity was supplied for release validation.
 * The later quit-cancellation fix was verified with headless approval/deferred
-  termination regression tests and a full gated build, without relaunching the
+  termination regression tests and a full Chromium build, without relaunching the
   GUI. Repeat interactive cancel/approve/quit testing in release validation.
 
 Before approving an update: review relevant security fixes and CEF API changes;
