@@ -118,6 +118,23 @@ trusted page code, not sandboxed Chrome extensions. Chrome extension support,
 cloud synchronization, Arc account migration and DRM compatibility are not
 promised.
 
+## Product website
+
+The dependency-free site in `site/` includes an interactive illustration of Spaces,
+pins, vertical tabs, split view, and the command menu. Its fictional `.example`
+pages are rendered locally, not fetched from the web. It is not the native app or
+an embedded browser engine; preview state resets when the page reloads.
+
+From the repository root, serve it locally:
+
+```sh
+python3 -m http.server 4173 --bind 127.0.0.1 --directory site
+```
+
+Open `http://127.0.0.1:4173`. Use Command/Ctrl+K for commands and arrow keys to
+switch tabs. Download links and project information remain available without
+JavaScript.
+
 ## Project guide
 
 - [Functional specification and reference boundaries](docs/reference/functional-spec.md)
