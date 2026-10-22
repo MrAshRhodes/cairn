@@ -1,6 +1,6 @@
 SWIFTW := scripts/swiftw
 # Architecture of the Chromium build and of the packaged app: `make app ARCH=x86_64` cross-builds the Intel app on an
-# Apple Silicon Mac. `build`, `test` and `run` always use this machine's architecture.
+# Apple Silicon Mac (`run` and `dmg` take it too). `build` and `test` compile for this machine, so leave ARCH unset.
 ARCH ?= $(shell uname -m)
 
 .PHONY: build test run app cef dmg clean
