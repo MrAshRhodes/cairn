@@ -35,12 +35,16 @@ public final class ShortcutStore {
             let document = try JSONDecoder().decode(Document.self, from: data)
             var map = ShortcutMap(actions: base.actions, preset: document.preset,
                                   assigned: document.bindings, cleared: Set(document.cleared))
-            // A hand-edited file may bind one chord twice; the first action in catalog order keeps it.
-            var seen = Set<KeyChord>()
-            for action in map.actions {
+            // New defaults must not steal saved remaps. System keys still win; duplicate custom
+            // bindings in a hand-edited file are resolved in catalog order.
+            var seen = Set(map.actions.filter { !$0.remappable }.compactMap { map.chord(for: $0.id) })
+            for action in map.actions where action.remappable && map.assigned[action.id] != nil {
                 guard let chord = map.chord(for: action.id), !seen.insert(chord).inserted else { continue }
                 map.reset(action.id)
-                if map.chord(for: action.id).map({ seen.contains($0) }) == true { try? map.assign(nil, to: action.id) }
+            }
+            for action in map.actions where action.remappable && map.assigned[action.id] == nil {
+                guard let chord = map.chord(for: action.id), !seen.insert(chord).inserted else { continue }
+                try? map.assign(nil, to: action.id)
             }
             return Loaded(map: map)
         } catch {

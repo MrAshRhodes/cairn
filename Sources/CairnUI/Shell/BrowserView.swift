@@ -182,7 +182,7 @@ struct BrowserView: View {
                 if addressFocused {
                     Text("↵").foregroundStyle(.tertiary)
                 } else if services.zoom != 1 {
-                    Button("\(Int(services.zoom * 100))%") { services.setZoom(1) }
+                    Button("\(Int(services.zoom * 100))%") { services.perform(action: "ui.zoom-reset") }
                         .font(.caption.monospacedDigit()).buttonStyle(.plain).help("Reset zoom")
                 }
             }
@@ -193,9 +193,12 @@ struct BrowserView: View {
             SymbolButton(title: "Downloads", symbol: "arrow.down.circle") { services.sheet = .downloads }
             Menu {
                 Button("Find in Page") { services.findPresented = true }
-                Button("Zoom In") { services.setZoom((services.activeEngineTab?.zoom ?? 1) + 0.1) }
-                Button("Zoom Out") { services.setZoom((services.activeEngineTab?.zoom ?? 1) - 0.1) }
-                Button("Actual Size") { services.setZoom(1) }
+                Button("Zoom In") { services.perform(action: "ui.zoom-in") }
+                    .disabled(!services.isEnabled(action: "ui.zoom-in"))
+                Button("Zoom Out") { services.perform(action: "ui.zoom-out") }
+                    .disabled(!services.isEnabled(action: "ui.zoom-out"))
+                Button("Actual Size") { services.perform(action: "ui.zoom-reset") }
+                    .disabled(!services.isEnabled(action: "ui.zoom-reset"))
                 Divider()
                 if let tab = model.selectedTab {
                     Button("Pin Tab") { model.pin(tab.id) }

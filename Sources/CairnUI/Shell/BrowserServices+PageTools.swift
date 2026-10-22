@@ -4,7 +4,7 @@ import CairnEngineKit
 import CairnModules
 
 // Page tools: DevTools, view-source, print / Save as PDF, per-site zoom, language and user agent.
-// Menus are owned elsewhere; everything here is reachable as a Command (see `pageToolCommands`) or a method.
+// Menus and command-bar rows share ShortcutCatalog entries and perform(action:) dispatch.
 extension BrowserServices {
     var activePageTools: EngineTabPageTools? { activeEngineTab as? EngineTabPageTools }
 
@@ -53,38 +53,45 @@ extension BrowserServices {
 
     public func exportPDF(to url: URL) {
         guard let tab = activePageTools else { return }
+        exportPDF(to: url, from: tab)
+    }
+
+    private func exportPDF(to url: URL, from tab: EngineTabPageTools) {
         tab.printToPDF(at: url) { [weak self] result in
             if case .failure(let error) = result { self?.report("The page could not be saved as PDF", error: error) }
         }
     }
 
     public func savePageAsPDF() {
-        guard activePageTools != nil else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.pdf]
-        panel.canCreateDirectories = true
+        guard let tab = activePageTools else { return }
         let title = model.selectedTab?.title ?? ""
-        panel.nameFieldStringValue = (title.isEmpty ? "Page" : title.replacingOccurrences(of: "/", with: "-")) + ".pdf"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        exportPDF(to: url)
+        let filename = (title.isEmpty ? "Page" : title.replacingOccurrences(of: "/", with: "-")) + ".pdf"
+        guard let url = pdfDestinationChooser(filename) else { return }
+        // The save panel runs a nested event loop; selection may have changed while it was open.
+        exportPDF(to: url, from: tab)
     }
 
     public func resetSiteZoom() {
         siteZoom?.removeAll()
-        activeEngineTab?.zoom = 1
+        setZoom(1)
     }
 
     func pageToolCommands() -> [Command] {
-        [
-            .init(id: "ui.devtools", title: "Toggle Developer Tools", symbol: "hammer",
-                  keywords: ["inspect", "console", "devtools"], shortcut: "⌥⌘I", perform: { [weak self] _ in self?.toggleDevTools() }),
-            .init(id: "ui.view-source", title: "View Page Source", symbol: "chevron.left.forwardslash.chevron.right", shortcut: "⌥⌘U",
-                  perform: { [weak self] _ in self?.viewSource() }),
-            .init(id: "ui.print", title: "Print…", symbol: "printer", shortcut: "⌘P", perform: { [weak self] _ in self?.printPage() }),
-            .init(id: "ui.save-pdf", title: "Save Page as PDF…", symbol: "doc.richtext", keywords: ["export", "pdf"],
-                  perform: { [weak self] _ in self?.savePageAsPDF() }),
-            .init(id: "ui.reset-site-zoom", title: "Reset Zoom for All Sites", symbol: "1.magnifyingglass",
-                  perform: { [weak self] _ in self?.resetSiteZoom() }),
+        let entries: [(id: String, keywords: [String])] = [
+            ("ui.devtools", ["inspect", "console", "devtools"]),
+            ("ui.view-source", ["source"]),
+            ("ui.print", ["print"]),
+            ("ui.save-pdf", ["export", "pdf"]),
+            ("ui.zoom-in", ["zoom"]),
+            ("ui.zoom-out", ["zoom"]),
+            ("ui.zoom-reset", ["zoom", "reset"]),
+            ("ui.reset-site-zoom", ["zoom", "reset", "sites"]),
         ]
+        return entries.compactMap { entry in
+            guard isEnabled(action: entry.id), let action = shortcuts.action(entry.id) else { return nil }
+            return Command(id: action.id, title: action.title, symbol: action.symbol ?? "command", keywords: entry.keywords,
+                           shortcut: shortcuts.chord(for: action.id)?.display,
+                           perform: { [weak self] _ in self?.perform(action: action.id) })
+        }
     }
 }

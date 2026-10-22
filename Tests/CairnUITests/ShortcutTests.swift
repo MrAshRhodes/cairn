@@ -39,8 +39,8 @@ import CairnModules
 
     @Test func assignClearAndReset() throws {
         var map = ShortcutMap()
-        try map.assign(KeyChord("u", command: true, option: true), to: "ui.history")
-        #expect(map.chord(for: "ui.history")?.display == "⌥⌘U")
+        try map.assign(KeyChord("u", command: true, shift: true, option: true), to: "ui.history")
+        #expect(map.chord(for: "ui.history")?.display == "⌥⇧⌘U")
         try map.assign(nil, to: "ui.history")
         #expect(map.chord(for: "ui.history") == nil)
         map.reset("ui.history")
@@ -83,14 +83,48 @@ import CairnModules
         defer { try? FileManager.default.removeItem(at: dir) }
         let store = ShortcutStore(directory: dir)
         var map = ShortcutMap(preset: .arc)
-        try map.assign(KeyChord("u", command: true, option: true), to: "ui.history")
+        try map.assign(KeyChord("u", command: true, shift: true, option: true), to: "ui.history")
         try map.assign(nil, to: "ui.find")
         try store.save(map)
         let loaded = store.load()
         #expect(loaded.error == nil)
         #expect(loaded.map.preset == .arc)
-        #expect(loaded.map.chord(for: "ui.history")?.display == "⌥⌘U")
+        #expect(loaded.map.chord(for: "ui.history")?.display == "⌥⇧⌘U")
         #expect(loaded.map.chord(for: "ui.find") == nil)
+    }
+
+    @Test(arguments: ["ui.print", "ui.devtools", "ui.view-source"])
+    func newPageToolDefaultsDoNotStealPreviouslySavedRemaps(id: String) throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ShortcutStore(directory: dir)
+        let chord = try #require(ShortcutMap().chord(for: id))
+        var legacy = ShortcutMap(actions: ShortcutCatalog.actions.filter { $0.id != id })
+        try legacy.assign(chord, to: "ui.history")
+        try store.save(legacy)
+        let loaded = store.load()
+        #expect(loaded.error == nil)
+        #expect(loaded.map.chord(for: "ui.history") == chord)
+        #expect(loaded.map.chord(for: id) == nil)
+        let bindings = Array(loaded.map.bindings.values)
+        #expect(Set(bindings).count == bindings.count)
+    }
+
+    @Test func conflictingSavedRemapsCannotStealSystemKeysOrOtherCustomBindings() throws {
+        let dir = try directory()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = ShortcutStore(directory: dir)
+        let map = ShortcutMap(assigned: [
+            "ui.print": KeyChord("q", command: true),
+            "ui.history": KeyChord("p", command: true),
+        ])
+        try store.save(map)
+        let loaded = store.load().map
+        #expect(loaded.chord(for: "system.quit") == KeyChord("q", command: true))
+        #expect(loaded.chord(for: "ui.history") == KeyChord("p", command: true))
+        #expect(loaded.chord(for: "ui.print") == nil)
+        let bindings = Array(loaded.bindings.values)
+        #expect(Set(bindings).count == bindings.count)
     }
 
     @Test(arguments: ["{ nope", #"{"schemaVersion":99}"#])
@@ -108,10 +142,10 @@ import CairnModules
     }
 
     @Test func discoveredModuleShortcutsDoNotStealBoundKeys() {
-        let free = Command(id: "mod.free", title: "Free", shortcut: "⌥⌘U", perform: { _ in })
+        let free = Command(id: "mod.free", title: "Free", shortcut: "⌥⇧⌘U", perform: { _ in })
         let taken = Command(id: "mod.taken", title: "Taken", shortcut: "⌘T", perform: { _ in })
         let map = ShortcutMap().adding(discovered: [free, taken])
-        #expect(map.chord(for: "mod.free")?.display == "⌥⌘U")
+        #expect(map.chord(for: "mod.free")?.display == "⌥⇧⌘U")
         #expect(map.chord(for: "mod.taken") == nil)
         #expect(map.chord(for: "ui.new-tab") == KeyChord("t", command: true))
     }
@@ -132,6 +166,34 @@ import CairnModules
         #expect(pin.keyEquivalent == "d" && pin.keyEquivalentModifierMask == .command)
         let everything = ShortcutMenu.allCases.flatMap { MenuBuilder.menu($0, map: ShortcutMap(), target: target, action: #selector(NSObject.description)).items }
         #expect(!everything.contains { ($0.representedObject as? String)?.hasPrefix("system.") == true })
+    }
+
+    @Test func pageToolsHaveRemappableMenuEntriesInBothPresets() throws {
+        let expected: [(String, ShortcutMenu, String?)] = [
+            ("ui.devtools", .tools, "⌥⌘I"), ("ui.view-source", .tools, "⌥⌘U"),
+            ("ui.print", .file, "⌘P"), ("ui.save-pdf", .file, nil),
+            ("ui.zoom-in", .view, "⌘+"), ("ui.zoom-out", .view, "⌘-"),
+            ("ui.zoom-reset", .view, "⌘0"), ("ui.reset-site-zoom", .view, nil),
+        ]
+        let target = NSObject()
+        let custom = KeyChord("p", command: true, shift: true, control: true)
+        for preset in KeymapPreset.allCases {
+            for (id, home, display) in expected {
+                var map = ShortcutMap(preset: preset)
+                let action = try #require(map.action(id))
+                #expect(action.remappable && action.menu == home)
+                #expect(map.chord(for: id)?.display == display)
+                try map.assign(custom, to: id)
+                let menu = MenuBuilder.menu(home, map: map, target: target, action: #selector(NSObject.description))
+                let item = try #require(menu.items.first { $0.representedObject as? String == id })
+                #expect(item.keyEquivalent == custom.keyEquivalent)
+                #expect(item.keyEquivalentModifierMask == custom.modifierMask)
+                #expect(item.target === target)
+                try map.assign(nil, to: id)
+                let cleared = MenuBuilder.item(action, map: map, target: target, action: #selector(NSObject.description))
+                #expect(cleared.keyEquivalent.isEmpty && cleared.keyEquivalentModifierMask.isEmpty)
+            }
+        }
     }
 
     @Test func tabSwitcherWrapsInBothDirections() {
