@@ -100,12 +100,12 @@ public final class BoostStore {
         boosts.filter(\.isEnabled).compactMap { boost in
             guard (try? boost.validate()) != nil else { return nil }
             let javaScript = trustedJavaScriptIDs.contains(boost.id) ? boost.js : ""
-            guard !boost.css.isEmpty || !javaScript.isEmpty else { return nil }
+            guard !boost.effectiveCSS.isEmpty || !javaScript.isEmpty else { return nil }
             guard let patterns = try? boost.hostPatterns.map({ try BoostHostPattern($0) }),
                   let encodedPatterns = try? Self.json(patterns.map {
                       ScriptPattern(host: $0.host, subdomainsOnly: $0.subdomainsOnly, allHosts: $0.allHosts)
                   }),
-                  let encodedCSS = try? Self.json(boost.css),
+                  let encodedCSS = try? Self.json(boost.effectiveCSS),
                   let styleID = try? Self.json("cairn-boost-" + boost.id.uuidString.lowercased()) else { return nil }
             let source = """
             (function () {
