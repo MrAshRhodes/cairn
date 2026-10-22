@@ -49,6 +49,15 @@ NS_ASSUME_NONNULL_BEGIN
 // A feature with no marker adds `// [Name]` directly above NS_ASSUME_NONNULL_END.
 
 // [Audio]
+@protocol CCChromiumTabAudioDelegate <NSObject>
+// `playing` follows Chromium's own audible state (with its short recently-audible debounce).
+- (void)chromiumTab:(CCChromiumTab *)tab audioPlayingChanged:(BOOL)playing;
+@end
+
+@interface CCChromiumTab (Audio)
+// The wanted mute state; it survives browser creation and navigation.
+@property(nonatomic) BOOL audioMuted;
+@end
 
 // [ContextMenu]
 @protocol CCChromiumTabContextMenuDelegate <NSObject>
@@ -65,6 +74,11 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)exitFullscreen;
 // Called by the Display handler when the page enters or leaves HTML fullscreen.
 - (void)pageFullscreenChanged:(BOOL)fullscreen;
+@end
+
+@protocol CCChromiumTabFaviconDelegate <NSObject>
+// PNG bytes of the page's icon, or nil when the page has none or none could be fetched.
+- (void)chromiumTab:(CCChromiumTab *)tab faviconPNG:(NSData *_Nullable)png iconURL:(NSString *_Nullable)iconURL;
 @end
 
 // [Download]

@@ -18,6 +18,10 @@ public final class BrowserModel: EngineTabDelegate {
     public var splitTabIDs: [UUID] = []
     public var tabStates: [UUID: EngineTabState] = [:]
     public var favicons: [UUID: NSImage] = [:]
+    /// Audible/muted state of live tabs; see BrowserModel+Media.swift.
+    public var mediaStates: [UUID: EngineTabMediaState] = [:]
+    @ObservationIgnored public var faviconStore: FaviconStore?
+    @ObservationIgnored var lastAudibleTabID: UUID?
     public var searchTemplate = URLResolver.defaultSearchTemplate
 
     public let engine: BrowserEngine
@@ -30,7 +34,7 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
     @ObservationIgnored public var onError: ((Error) -> Void)?
     public private(set) var errorMessage: String?
-    @ObservationIgnored private var liveProfileIDs: [UUID: String] = [:]
+    @ObservationIgnored private(set) var liveProfileIDs: [UUID: String] = [:]
     @ObservationIgnored private(set) var liveSpaceIDs: [UUID: UUID] = [:]
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
@@ -95,7 +99,7 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func unloadTab(_ id: UUID) {
         let tab = liveTabs[id]
-        liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil
+        liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
         tab?.delegate = nil
         tab?.close()
@@ -295,7 +299,7 @@ public final class BrowserModel: EngineTabDelegate {
         }
     }
     public func engineTab(_ tab: EngineTab, didReceiveFavicon image: NSImage?) {
-        if let id = itemID(for: tab) { favicons[id] = image }
+        if let id = itemID(for: tab) { favicons[id] = image; cacheFavicon(image, for: id) }
     }
     public func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) {
         guard let id = itemID(for: tab), let origin = liveSpaceIDs[id], spaceIndex(origin) != nil else { return }

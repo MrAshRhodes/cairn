@@ -69,6 +69,7 @@ using namespace cc;
   native.frame = self.view.bounds;
   browser->GetHost()->SetZoomLevel(std::log(_zoom) / std::log(1.2));
   [self enableSpellChecking];
+  [self applyAudioMuted];
   self.scriptOperations = 1;
   __weak CCChromiumTab *weakSelf = self;
   [self call:@"Page.enable" params:@{} reply:^(NSDictionary *, NSError *error) {

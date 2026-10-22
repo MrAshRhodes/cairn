@@ -55,6 +55,7 @@ public final class BrowserServices {
     var moduleReview: ModuleScriptReview?
     @ObservationIgnored private let workspaceStore: WorkspaceStore
     @ObservationIgnored private var archiveTimer: Timer?
+    @ObservationIgnored private var mediaKeys: MediaKeyController?
 
     public init(model: BrowserModel, settings: Settings? = nil,
                 directory: URL = WorkspaceStore.defaultDirectory,
@@ -132,6 +133,8 @@ public final class BrowserServices {
             boostsWritable = false
             report("Boosts could not be loaded", detail: "\(error.localizedDescription)\nEditing is disabled to preserve your saved Boosts.")
         }
+        model.faviconStore = FaviconStore(directory: directory.appendingPathComponent("Favicons", isDirectory: true))
+        mediaKeys = MediaKeyController(model: model)
         model.userScriptProvider = { [weak self] url in self?.boosts.scripts(for: url) ?? [] }
         modules.onError = { [weak self] error in self?.report("Module error", error: error) }
         BuiltinModules.all().forEach { modules.register($0) }
