@@ -38,4 +38,45 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)close;
 @end
 
+// FEATURE SLOTS. Additive only: do not edit the declarations above. Each feature adds its public API
+// under its own marker, so features written in parallel do not touch the same lines. Keep the blank
+// line between slots. A slot holds what the feature needs:
+//   - events: a protocol such as CCChromiumTab<Feature>Delegate. The Swift ChromiumTab adopts it in
+//     ChromiumTab+<Feature>.swift and the handler reaches it with
+//     `[tab.delegate conformsToProtocol:@protocol(CCChromiumTab<Feature>Delegate)]`;
+//   - commands: a category, `@interface CCChromiumTab (<Feature>)`, implemented in CCTab+<Feature>.mm.
+// A feature with no marker adds `// [Name]` directly above NS_ASSUME_NONNULL_END.
+
+// [Audio]
+
+// [ContextMenu]
+
+// [Dialog]
+
+// [Display]
+
+// [Download]
+
+// [Drag]
+
+// [Find]
+
+// [Focus]
+
+// [JSDialog]
+
+// [Keyboard]
+
+// [LifeSpan]
+
+// [Load]
+
+// [Permission]
+
+// [Print]
+
+// [Request]
+
+// [ResourceRequest]
+
 NS_ASSUME_NONNULL_END
