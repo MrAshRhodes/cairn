@@ -4,12 +4,13 @@ import CairnChromiumEngine
 
 enum SmokeError: Error { case failed(String) }
 
-@MainActor final class Smoke: NSObject, EngineTabDelegate {
+@MainActor final class Smoke: NSObject, EngineTabDelegate, EngineTabContextMenuEvents {
     let engine: ChromiumEngine
     let base: URL
     var windows: [NSWindow] = []
     var tabs: [EngineTab] = []
     var popups = 0
+    var externalURLs: [URL] = []
 
     init(root: URL, base: URL) {
         self.base = base
@@ -163,6 +164,10 @@ enum SmokeError: Error { case failed(String) }
             _ = try await js(first, "window.open('/popup'); true")
             try await Task.sleep(nanoseconds: 200_000_000)
             try require(popups == 0, "unsolicited popup is blocked")
+            _ = try await js(first, "location.href = 'mailto:smoke@example.com'; true")
+            try await wait { !self.externalURLs.isEmpty }
+            try require(externalURLs.first?.absoluteString == "mailto:smoke@example.com" && first.state.errorMessage == nil,
+                        "external protocol is reported to the app, never launched by Chromium")
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
@@ -180,6 +185,7 @@ enum SmokeError: Error { case failed(String) }
     func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) { popups += 1 }
     func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) {}
     func engineTabDidRequestClose(_ tab: EngineTab) { tab.close() }
+    func engineTab(_ tab: EngineTab, requestsExternalURL url: URL) { externalURLs.append(url) }
 }
 
 MainActor.assumeIsolated {
