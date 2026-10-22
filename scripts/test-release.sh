@@ -5,10 +5,10 @@ cd "$(dirname "$0")/.."
 unset SPARKLE_PRIVATE_ED_KEY SPARKLE_KEYCHAIN_ACCOUNT
 work="$PWD/.build/release-tests"
 mkdir -p "$work"
-for script in scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/*release*.sh; do
+for script in scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/run-smoke.sh scripts/*release*.sh; do
   bash -n "$script"
 done
-shellcheck scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/*release*.sh
+shellcheck scripts/bundle-app.sh scripts/make-dmg.sh scripts/make-appcast.sh scripts/verify-bundle.sh scripts/run-smoke.sh scripts/*release*.sh
 python3 - <<'PY'
 import ast
 from pathlib import Path
@@ -34,6 +34,8 @@ python3 Resources/ReleaseTools/ReleaseAssetsTests.py
 python3 Resources/ReleaseTools/ReleasePipelineTests.py
 # The bundle gate against small ad-hoc Chromium apps: every packaging rule is broken once and must be reported.
 python3 Resources/ReleaseTools/VerifyBundleTests.py
+# The CI smoke wrapper: retries only the documented teardown flake, keeps logs and crash reports.
+python3 Resources/ReleaseTools/RunSmokeTests.py
 # RFC 8032 public key + signature for an empty message; private material is never needed.
 public_key="11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 signature="5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="
