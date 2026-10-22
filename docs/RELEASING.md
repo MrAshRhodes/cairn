@@ -109,7 +109,10 @@ open dist/Cairn.app
 `scripts/bundle-app.sh` packages Chromium for a single architecture, the host's
 unless `ARCH=arm64` or `ARCH=x86_64` is set. It never downloads CEF: run `make cef`
 first. A missing or stale engine fails packaging; there is no WebKit fallback.
-`make app`, `make run` and `make dmg` prepare CEF and bundle in one step.
+`make app`, `make run` and `make dmg` prepare CEF and bundle in one step. `make cef`,
+`make app`, `make run` and `make dmg` take the same `ARCH` variable: `make app ARCH=x86_64`
+cross-builds the Intel app on an Apple Silicon Mac, while `make build` and `make test`
+compile for this machine and should run without it.
 Universal packaging and the old WebKit build targets are removed. Setting
 `CAIRN_WITH_CHROMIUM=0` is an error, not an alternate build mode.
 Use `CONFIGURATION=debug` for a debug build.
@@ -117,15 +120,25 @@ Use `CONFIGURATION=debug` for a debug build.
 Without `SIGNING_IDENTITY`, everything is explicitly **ad-hoc signed**, not Developer
 ID signed, not notarized, and not trusted by Gatekeeper for public distribution.
 Do not tell users to disable Gatekeeper globally. The script verifies nested code
-signatures, architecture, Sparkle linkage, and the app-relative framework rpath.
+signatures, architecture, Sparkle linkage, and the app-relative framework rpath, and
+finishes with the [packaging gate](#packaging-gate): `scripts/verify-bundle.sh` fails the
+build on any layout, Info.plist, architecture, signature or entitlement problem.
 Sparkle symlinks and executable bits are preserved with `ditto`; nested Mach-O files,
 XPC services, helper apps, and frameworks are signed inside-out, not with `--deep`.
-The main app retains minimal camera, microphone and location entitlements (a site only
+The main app retains minimal camera, microphone, location and Bluetooth entitlements (a site only
 gets them after the user allows it in Cairn's own permission prompt); renderer and
 GPU helpers receive the CEF JIT entitlement, and the generic helper, where capture
 runs, receives the camera/microphone entitlements. Library validation is not disabled.
 Chromium handles web networking itself; the former WebKit-only transport-security
 exception is removed. Sparkle's update transport remains HTTPS-only.
+
+The Bluetooth entitlement and its Info.plist usage string mirror Chromium's own app
+entitlements. Cairn has no Web Bluetooth chooser, so the entitlement is dormant, but macOS
+terminates an app that reaches a privacy-protected API without its usage string, and a
+hardened app needs the entitlement for the prompt to appear at all. To run stricter, remove
+the entitlement in `Resources/Cairn.entitlements`, the usage string in `Resources/Info.plist`,
+and the string's entry in `scripts/verify-bundle.sh` and `Resources/ReleaseTools/VerifyBundleTests.py`
+together; the gate compares the signed entitlements with the source plist, so nothing else changes.
 
 ## Update trust and public key
 
@@ -207,6 +220,11 @@ Repeat on an Intel builder, replacing `arm64` with `x86_64`. Use the same versio
 build number, source commit, public key and signing mode. Each invocation writes
 `Cairn-0.1.1-ARCH.zip`, `.dmg` and `.json` into `dist/release`; the JSON records
 checksums and build provenance. It does not authenticate a feed or publish.
+Before it finishes, `scripts/release.sh` runs the [packaging gate](#packaging-gate) on
+the ZIP and the DMG themselves (the ZIP is extracted and the image mounted read-only
+under `.build`), so what users download is what is verified; a notarized build is also
+checked after stapling and before the DMG is built. A failing rule stops the build and
+names every problem.
 Copy both builders' three files into one clean release directory. Do not mix
 versions or retain unrelated files there.
 
@@ -349,6 +367,45 @@ update key. Its legacy engine preference is ignored; website cookies and storage
 are not migrated from WebKit profiles. One-architecture feeds, mismatched versions,
 duplicate architectures and non-Chromium archives are rejected.
 
+**Known limitation.** Sparkle has no `x86_64` hardware requirement, so the arm64 item's
+exclusion of Intel Macs and the item order are all that keep an Apple Silicon Mac off the
+Intel app. A hard separation would give each architecture its own Sparkle channel and have
+the updater (`Sources/CairnUpdater`) return its own channel from `allowedChannels`. That
+needs an app release first: clients that predate it see only items without a channel, so
+the feed cannot move to channels until the installed clients have the new updater. It is an
+application change, not something the packaging scripts can add.
+
+### Building and testing the Intel app
+
+CI and Release build and test x86_64 natively on `macos-15-intel`, GitHub's last x86_64
+macOS runner image: GitHub lists it as available until **August 2027**
+([actions/runner-images#13045](https://github.com/actions/runner-images/issues/13045)).
+Decide before then how the Intel app is built and tested, because Apple Silicon runners
+cannot run it natively. The fallback was verified on an Apple Silicon Mac (macOS 26.6,
+Command Line Tools, 2026-10-22):
+
+```sh
+python3 engine/tool.py fetch --arch x86_64
+python3 engine/tool.py build --arch x86_64      # cross-builds the CEF wrapper (CMAKE_OSX_ARCHITECTURES)
+ARCH=x86_64 scripts/bundle-app.sh               # `make app ARCH=x86_64` runs all three steps
+scripts/make-dmg.sh
+```
+
+* `Cairn`, the helpers and CEF are thin x86_64 binaries (Sparkle stays universal).
+  `scripts/verify-bundle.sh --arch x86_64` passes for the app, the ZIP and the DMG, and
+  `--arch arm64` rejects the same app.
+* Under Rosetta 2 the Intel helper loaded the x86_64 CEF and the bundled smoke test passed
+  (23 assertions, orderly exit). Chromium logs that Rosetta is "neither tested nor
+  maintained", and `engine/smoke.py` packages only the host architecture, so that run used a
+  throwaway wrapper that reported an x86_64 host and passed `--arch x86_64` to SwiftPM. Treat
+  it as a sanity check, not as Intel validation.
+* Not verified: real Intel hardware, performance, and Developer ID signing or notarization
+  of an Intel app built on Apple Silicon (`scripts/release.sh` applies unchanged).
+
+A lasting answer is a self-hosted Intel Mac runner, or cross-built Intel apps smoke-tested
+under Rosetta once `engine/smoke.py` accepts an architecture. Record the decision here
+before the image is retired; never ship an Intel app that nobody has run.
+
 ## Optional Developer ID and notarization
 
 This is a future opt-in path, not the v0.1.0 preview's signing status. With the
@@ -369,7 +426,11 @@ Provision the profile yourself with Apple's `notarytool`; Xcode/notarytool must 
 available. Without a notary profile/credentials the release is **not notarized** even
 if it is Developer ID signed. Partial credentials or notarization failure stop release
 preparation rather than silently downgrading. App and DMG are separately submitted,
-accepted, stapled, and validated. The app is checked with `spctl` after stapling.
+accepted, stapled, and validated. The app is checked with `spctl` after stapling. The
+[packaging gate](#packaging-gate) then runs with `--require-developer-id --notarized` on the
+stapled app, the ZIP and the DMG: hardened runtime, a Developer ID authority, a secure
+timestamp and one Team ID on every nested code object, stapled tickets and Gatekeeper
+acceptance. A Developer ID build without notarization still has to pass `--require-developer-id`.
 
 CI can import an existing Developer ID certificate into a short-lived keychain under
 `.build/release-signing`, which is deleted on exit. It never changes the default
@@ -378,12 +439,15 @@ keychain or the user's keychain search list. Do not enable shell tracing around 
 ## GitHub Actions (maintainer setup, not automatic secret provisioning)
 
 CI tests on macOS Apple Silicon and Intel, validates workflows/shell scripts, prepares
-CEF with `make cef`, runs the development ad-hoc Chromium smoke test
-(`engine/smoke.py --development-ad-hoc`), and packages a clearly ad-hoc,
-single-architecture Chromium DMG per runner without any secrets. Those DMGs are
+CEF with `make cef` (the pinned archive is cached), runs the native Chromium lifecycle
+regressions, runs the development ad-hoc Chromium smoke test through `scripts/run-smoke.sh`
+(one retry, only for the documented teardown flake; its logs and any crash reports are kept as
+`smoke-logs-<runner>` when a step fails or a retry was needed), and packages a clearly ad-hoc,
+single-architecture Chromium DMG per runner without any secrets. The bundle must pass the
+[packaging gate](#packaging-gate). Those DMGs are
 short-lived development artifacts, not releases. This is a functional Chromium
 check, **not** a Developer ID, notarization, hardened-runtime or CEF security-gap
-gate.
+gate. [CI.md](CI.md) describes every job, cache and artifact.
 
 **Automatic release signing/publication is not configured.** Private
 signing material has not been uploaded to GitHub and is not uploaded by the local
@@ -422,6 +486,12 @@ runs: arm64 on `macos-15`, x86_64 on `macos-15-intel`. There is no architecture
 selector or universal build. The finalizer combines `release-arm64`,
 `release-x86_64` and `chromium-gate` artifacts into `authenticated-release`.
 Only finalization receives the Sparkle private key.
+
+The build matrix does not fail fast. If one architecture fails, the other still finishes and
+uploads its `release-<arch>` artifact, so **Re-run failed jobs** rebuilds only the failed
+architecture and the dependent jobs then continue. A failed build uploads `release-logs-<arch>`
+(the notarization verdicts and the packaging test logs, for 14 days). They are copied out of
+`.build` first because `upload-artifact` skips hidden directories.
 
 Build and finalization have `contents: read`; the separate publish job has
 `contents: write` and no signing secrets. It verifies checksums and publishes
@@ -464,6 +534,54 @@ Chromium has its own security/update cadence. Passing packaging checks does not
 satisfy the release-security gate; review the [maintenance guide](UPDATING_CHROMIUM.md)
 and the recorded gate result before distribution.
 
+## Packaging gate
+
+`scripts/verify-bundle.sh` checks a built app against the packaging contract. It is read-only,
+reports every problem before it exits non-zero (1; 2 for a usage error), and runs automatically
+at the end of `scripts/bundle-app.sh` (so in CI, `make app` and every release build) and in
+`scripts/release.sh`: on the stapled app of a notarized build, then on the finished ZIP and DMG.
+
+```sh
+scripts/verify-bundle.sh [--arch arm64|x86_64] [--require-developer-id] [--notarized] [APP|ZIP|DMG]
+scripts/verify-bundle.sh --arch x86_64 dist/release/Cairn-0.1.1-x86_64.zip
+scripts/verify-bundle.sh --arch arm64 --require-developer-id --notarized dist/release/Cairn-0.1.1-arm64.dmg
+```
+
+A ZIP is extracted and a DMG is mounted read-only, both under `.build`, so the check runs on the
+bytes users download. `--arch` defaults to the architecture the app declares. It verifies:
+
+* **Info.plist:** no `@PLACEHOLDER@` or build-machine path; identifiers, version, the `http`/`https`
+  URL types and `CairnBrowserEngine`; the camera, microphone, location, Bluetooth and local-network
+  usage strings; the signed-feed settings and a 32-byte Sparkle key (required for Developer ID
+  builds); `LSMinimumSystemVersion` equal to `Package.swift`'s platform.
+* **Layout:** the CEF framework and resources with only this architecture's V8 snapshot, the sandbox
+  library, and exactly the five helper apps with their derived bundle IDs, `LSUIElement`, deployment
+  target and the app's camera and microphone usage strings (capture runs in the helpers, and macOS
+  names the capturing process). No other app is allowed in `Frameworks`.
+* **Architecture:** every Mach-O is a thin binary for `--arch` (Sparkle must contain that slice) and
+  needs no newer macOS than `LSMinimumSystemVersion`.
+* **Signatures:** `codesign --verify --deep --strict` and every nested code object signed. Developer ID
+  builds also need the hardened runtime, a Developer ID Application authority, a secure timestamp and
+  one Team ID throughout (a mix fails dyld's library validation).
+* **Entitlements:** each process carries exactly the keys of its source plist
+  (`Resources/Cairn.entitlements`; `engine/entitlements/renderer.plist` for GPU and Renderer;
+  `helper.plist` for the other helpers), including the required ones (`allow-jit` for GPU and Renderer,
+  camera and audio input for the generic helper), and never `get-task-allow`,
+  `disable-library-validation`, `allow-unsigned-executable-memory`, `disable-executable-page-protection`,
+  `allow-dyld-environment-variables`, `debugger` or `app-sandbox`.
+* **Stray files:** provisioning profiles, certificates and keys, crash dumps, logs, `.dSYM`s, Chromium
+  profile files and `.git`, and symlinks that leave the bundle; in a DMG, anything but `Cairn.app` and
+  the `/Applications` link.
+* **Notarization** (`--notarized`): a stapled ticket and Gatekeeper acceptance (`spctl`) for the app and
+  the DMG.
+
+An ad-hoc build prints a notice that hardened runtime, Developer ID, notarization and Gatekeeper are
+**not** verified, and `--require-developer-id` rejects it: only a real Developer ID build can be
+verified for those. When a CEF update makes a rule stop matching (a renamed library, say), fix the
+script after understanding the change; do not loosen the check to get a build through.
+`Resources/ReleaseTools/VerifyBundleTests.py` assembles small ad-hoc Chromium-shaped apps and breaks each
+rule once; `scripts/test-release.sh` runs it.
+
 ## Validation boundaries
 
 `scripts/test-release.sh` exercises the updater's fail-closed configuration and
@@ -476,11 +594,16 @@ Test private keys pass through child-process environments and signer stdin, not
 command-line arguments or files; they remain visible to the same user while the
 child runs. Temporary public fixtures are removed afterward. These checks cover
 both signing modes, ambiguous/missing credentials, inaccessible keys, key
-mismatches and suppressed signer diagnostics.
+mismatches and suppressed signer diagnostics. The same script runs the offline tests of
+the packaging gate (`VerifyBundleTests.py`), the CI smoke wrapper (`RunSmokeTests.py`)
+and the Chromium tracking issue (`ChromiumIssueTests.py`, with a fake `gh`; nothing is
+contacted).
 
 A real local ad-hoc app/DMG and linkage can be verified without Apple credentials.
 End-to-end update installation requires a real key, two increasing app versions and an
 accessible feed; Apple signing/notarization requires your account. Test those before
 broad distribution. The v0.1.0 developer preview has not yet had its integrated GUI
 manually verified. No local build or signature validation alone establishes
-Gatekeeper trust or interactive GUI correctness.
+Gatekeeper trust or interactive GUI correctness. In particular no check in this repository has
+exercised a hardened-runtime Developer ID build, notarization or Gatekeeper acceptance
+(the packaging gate verifies them as soon as such a build exists), or real Intel hardware.
