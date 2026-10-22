@@ -69,8 +69,9 @@ downloads.
 ## Developer preview status
 
 The implementation includes native Spaces, vertical tabs,
-favorites and pins, session restoration and archiving, command search, split
-browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
+favorites and pins, session restoration and archiving, a command bar with site
+search and a remappable keyboard map (with an Arc-compatible preset), split
+browsing with up to four panes, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
 explicit trust decision. Downloads are delegated to Cairn's URL-based downloader;
 website cookies are not forwarded, so downloads requiring a website sign-in may fail.
 
@@ -140,6 +141,7 @@ JavaScript.
 ## Project guide
 
 - [Functional specification and reference boundaries](docs/reference/functional-spec.md)
+- Features: [command bar](docs/features/command-bar.md), [keyboard shortcuts](docs/features/shortcuts.md), [split view](docs/features/split-view.md)
 - [Contributing and development invariants](CONTRIBUTING.md)
 - [Privacy](PRIVACY.md) and [security policy](SECURITY.md)
 - [Independent implementation policy](docs/CLEAN_ROOM.md)
