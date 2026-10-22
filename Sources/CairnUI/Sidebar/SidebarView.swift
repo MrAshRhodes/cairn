@@ -13,6 +13,15 @@ public struct SidebarView: View {
     @ViewState<Bool> private var archivePresented = false
     @ViewState<TabItem?> private var renamingTab = nil
     @ViewState<String> private var tabTitle = ""
+    @ViewState<FolderPrompt?> private var folderPrompt = nil
+    @ViewState<String> private var folderName = ""
+
+    struct FolderPrompt: Identifiable {
+        let id = UUID()
+        var folderID: UUID?
+        var parentID: UUID?
+        var pinTabID: UUID?
+    }
 
     public init(model: BrowserModel, showCommandBar: @escaping () -> Void, services: BrowserServices? = nil) {
         self.model = model
@@ -104,7 +113,7 @@ public struct SidebarView: View {
             }
             footer
         }
-        .background(accent.opacity(0.045))
+        .background(model.selectedSpace.theme.map { AnyShapeStyle($0.gradient()) } ?? AnyShapeStyle(accent.opacity(0.045)))
         .sheet(isPresented: $creatingSpace) { SpaceEditor(model: model, space: nil) }
         .sheet(item: $editedSpace) { SpaceEditor(model: model, space: $0) }
         .sheet(isPresented: $archivePresented) { ArchiveView(model: model) }
@@ -121,6 +130,12 @@ public struct SidebarView: View {
             Button("Cancel", role: .cancel) { renamingTab = nil }
             Button("Save") { renameTab(); renamingTab = nil }
         }
+        .alert(folderPrompt?.folderID == nil ? "New Folder" : "Rename Folder", isPresented: Binding(
+            get: { folderPrompt != nil }, set: { if !$0 { folderPrompt = nil } })) {
+            TextField("Folder name", text: $folderName)
+            Button("Cancel", role: .cancel) { folderPrompt = nil }
+            Button("Save") { commitFolderPrompt(); folderPrompt = nil }
+        }
     }
 
     private func heading(_ text: String, symbol: String? = nil) -> some View {
@@ -132,48 +147,90 @@ public struct SidebarView: View {
     }
 
     private func section(_ list: TabList, title: String, tabs: [TabItem]) -> some View {
-        VStack(spacing: 4) {
-            heading(title)
-            if tabs.isEmpty {
+        let collapsed = list == .pinned && model.selectedSpace.pinnedCollapsed == true
+        return VStack(spacing: 4) {
+            if list == .pinned {
+                HStack {
+                    Button { model.setPinnedCollapsed(!collapsed) } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "chevron.right").font(.system(size: 8, weight: .semibold))
+                                .rotationEffect(.degrees(collapsed ? 0 : 90))
+                            heading(title)
+                        }
+                    }.buttonStyle(.plain)
+                        .accessibilityLabel(collapsed ? "Expand Pinned" : "Collapse Pinned")
+                    SymbolButton(title: "New Folder", symbol: "folder.badge.plus") {
+                        folderName = ""; folderPrompt = FolderPrompt()
+                    }.font(.caption).foregroundStyle(.secondary).frame(width: 28, height: 24)
+                }
+            } else { heading(title) }
+            if tabs.isEmpty && model.selectedSpace.folders == nil {
                 Text(list == .pinned ? "Keep your essentials here" : "A fresh start")
                     .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
             }
-            ForEach(tabs) { tab in
-                HStack(spacing: 5) {
-                    Button { select(tab.id) } label: {
-                        HStack(spacing: 9) {
-                            tabIcon(tab).frame(width: 20)
-                            Text(tab.displayTitle).lineLimit(1).font(.system(size: 13))
-                            Spacer(minLength: 0)
-                            if let media = model.mediaStates[tab.id], media.showsIndicator {
-                                Button { model.toggleMute(tab.id) } label: {
-                                    Image(systemName: media.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                                        .font(.system(size: 11)).foregroundStyle(media.isMuted ? .secondary : accent)
-                                }.buttonStyle(.plain).help(media.isMuted ? "Unmute Tab" : "Mute Tab")
-                                    .accessibilityLabel(media.isMuted ? "Unmute tab" : "Mute tab")
-                            }
-                            if model.tabStates[tab.id]?.isLoading == true {
-                                ProgressView().controlSize(.mini).accessibilityLabel("Loading")
-                            }
-                        }.padding(.leading, 10).frame(height: 38).contentShape(Rectangle())
-                    }.buttonStyle(.plain)
-                    SymbolButton(title: list == .pinned ? "Reset to Pinned Address" : "Close Tab",
-                                 symbol: list == .pinned ? "arrow.uturn.backward" : "xmark") {
-                        if list == .pinned, let url = tab.homeURL { model.load(url, in: tab.id) }
-                        else { model.closeTab(tab.id) }
-                    }.font(.caption).foregroundStyle(.secondary)
-                }
-                .background(tab.id == model.selectedTabID ? accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
-                .accessibilityElement(children: .contain)
-                .accessibilityLabel(tab.id == model.selectedTabID ? "Selected tab" : "Tab")
-                .contextMenu { tabMenu(tab, list: list) }
-                .draggable(tab.id.uuidString)
-                .dropDestination(for: String.self) { items, _ in move(items, to: list, before: tab.id) }
+            if collapsed {
+                Text("\(tabs.count) pinned").font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 10)
+            } else if list == .pinned {
+                pinnedTree(parent: nil, depth: 0)
+            } else {
+                ForEach(tabs) { tabRow($0, list: list, depth: 0) }
             }
             Color.clear.frame(height: 5).contentShape(Rectangle())
         }
         .dropDestination(for: String.self) { items, _ in move(items, to: list) }
+    }
+
+    private func pinnedTree(parent: UUID?, depth: Int) -> AnyView {
+        AnyView(VStack(spacing: 4) {
+            ForEach(model.childFolders(of: parent)) { folder in
+                FolderRowView(folder: folder, depth: depth, itemCount: model.pinnedTabs(in: folder.id).count, accent: accent,
+                              toggle: { model.setFolderCollapsed(folder.id, !folder.collapsed) },
+                              rename: { folderName = folder.name; folderPrompt = FolderPrompt(folderID: folder.id) },
+                              addSubfolder: { folderName = ""; folderPrompt = FolderPrompt(parentID: folder.id) },
+                              delete: { model.deleteFolder(folder.id) },
+                              dropTab: { dropOnFolder($0, folder: folder.id) })
+                if !folder.collapsed { pinnedTree(parent: folder.id, depth: depth + 1) }
+            }
+            ForEach(model.pinnedTabs(in: parent)) { tabRow($0, list: .pinned, depth: depth) }
+        })
+    }
+
+    private func tabRow(_ tab: TabItem, list: TabList, depth: Int) -> some View {
+        HStack(spacing: 5) {
+            TabRowAccessories(tab: tab, placement: .leading)
+            Button { select(tab.id) } label: {
+                HStack(spacing: 9) {
+                    tabIcon(tab).frame(width: 20)
+                    Text(tab.displayTitle).lineLimit(1).font(.system(size: 13))
+                    Spacer(minLength: 0)
+                    if let media = model.mediaStates[tab.id], media.showsIndicator {
+                        Button { model.toggleMute(tab.id) } label: {
+                            Image(systemName: media.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                                .font(.system(size: 11)).foregroundStyle(media.isMuted ? .secondary : accent)
+                        }.buttonStyle(.plain).help(media.isMuted ? "Unmute Tab" : "Mute Tab")
+                            .accessibilityLabel(media.isMuted ? "Unmute tab" : "Mute tab")
+                    }
+                    if model.tabStates[tab.id]?.isLoading == true {
+                        ProgressView().controlSize(.mini).accessibilityLabel("Loading")
+                    }
+                }.padding(.leading, 10).frame(height: 38).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            TabRowAccessories(tab: tab, placement: .trailing)
+            SymbolButton(title: list == .pinned ? "Reset to Pinned Address" : "Close Tab",
+                         symbol: list == .pinned ? "arrow.uturn.backward" : "xmark") {
+                if list == .pinned, let url = tab.homeURL { model.load(url, in: tab.id) }
+                else { model.closeTab(tab.id) }
+            }.font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.leading, CGFloat(depth) * 14)
+        .background(tab.id == model.selectedTabID ? accent.opacity(0.16) : .clear, in: RoundedRectangle(cornerRadius: 8))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(tab.id == model.selectedTabID ? "Selected tab" : "Tab")
+        .contextMenu { tabMenu(tab, list: list) }
+        .draggable(tab.id.uuidString)
+        .dropDestination(for: String.self) { items, _ in move(items, to: list, before: tab.id) }
     }
 
     private var footer: some View {
@@ -224,6 +281,20 @@ public struct SidebarView: View {
         Divider()
         if list == .pinned { Button("Unpin Tab") { model.unpin(tab.id) } }
         else { Button("Pin to Space") { model.pin(tab.id) } }
+        if list != .favorites, list != .archive {
+            Menu("Pin to Folder") {
+                ForEach(model.folders()) { folder in
+                    Button(folder.name) { model.pin(tab.id, toFolder: folder.id) }
+                }
+                if !model.folders().isEmpty { Divider() }
+                Button("New Folder…") { folderName = ""; folderPrompt = FolderPrompt(pinTabID: tab.id) }
+            }
+            if list == .pinned, tab.folderID != nil { Button("Move Out of Folder") { model.pin(tab.id, toFolder: nil) } }
+        }
+        if list == .pinned || list == .favorites {
+            Button("Replace Pin with Current Page") { model.replacePinWithCurrentPage(tab.id) }
+        }
+        if list == .pinned || list == .today { Button("Duplicate Tab") { model.duplicateTab(tab.id) } }
         if list == .favorites { Button("Remove from Favorites") { model.unfavorite(tab.id) } }
         else { Button("Add to Favorites") { model.favorite(tab.id) } }
         if let home = tab.homeURL { Button("Reset to Saved Address") { model.load(home, in: tab.id) } }
@@ -250,12 +321,39 @@ public struct SidebarView: View {
         if let services { services.selectTab(id) } else { model.select(id) }
     }
     private func move(_ items: [String], to list: TabList, before target: UUID? = nil) -> Bool {
+        if list == .pinned, let payload = items.first, payload.hasPrefix(FolderRowView.dragPrefix) {
+            guard let dragged = UUID(uuidString: String(payload.dropFirst(FolderRowView.dragPrefix.count))) else { return false }
+            model.moveFolder(dragged, toParent: nil)
+            return true
+        }
         guard let id = items.first.flatMap(UUID.init(uuidString:)), model.item(id) != nil, id != target else { return false }
         let sourceLocation = model.locate(id)
         let targetLocation = target.flatMap { model.locate($0) }
         let index = TabDrop.insertionIndex(source: sourceLocation, target: targetLocation)
-        model.moveTab(id, to: list, in: model.selectedSpace.id, at: index)
+        if list == .pinned {
+            model.pin(id, toFolder: target.flatMap { model.item($0)?.folderID }, at: index)
+        } else {
+            model.moveTab(id, to: list, in: model.selectedSpace.id, at: index)
+        }
         return true
+    }
+    private func dropOnFolder(_ items: [String], folder: UUID) -> Bool {
+        guard let payload = items.first else { return false }
+        if payload.hasPrefix(FolderRowView.dragPrefix),
+           let dragged = UUID(uuidString: String(payload.dropFirst(FolderRowView.dragPrefix.count))), dragged != folder {
+            model.moveFolder(dragged, toParent: folder)
+            return true
+        }
+        guard let id = UUID(uuidString: payload), model.item(id) != nil else { return false }
+        model.pin(id, toFolder: folder)
+        return true
+    }
+    private func commitFolderPrompt() {
+        guard let prompt = folderPrompt else { return }
+        if let folderID = prompt.folderID { model.renameFolder(folderID, to: folderName) }
+        else if let created = model.createFolder(name: folderName, parent: prompt.parentID), let tab = prompt.pinTabID {
+            model.pin(tab, toFolder: created)
+        }
     }
     private func reorder(_ id: UUID, delta: Int) {
         guard let location = model.locate(id) else { return }
@@ -281,6 +379,7 @@ struct SpaceEditor: View {
     @ViewState<String> private var name = ""
     @ViewState<String> private var icon = "leaf"
     @ViewState<String> private var color = "#527B72"
+    @ViewState<SpaceTheme?> private var theme = nil
     private let colors = ["#527B72", "#687FA0", "#A26D57", "#9B8052", "#8E6D86", "#64796A"]
 
     var body: some View {
@@ -303,6 +402,7 @@ struct SpaceEditor: View {
                         .accessibilityAddTraits(color == value ? .isSelected : [])
                 }
             }
+            SpaceThemeView(theme: $theme, fallbackHex: color)
             Label("Each Space keeps separate cookies and site storage. Favorites are shared across Spaces.", systemImage: "lock.shield")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if let space {
@@ -314,13 +414,16 @@ struct SpaceEditor: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button(space == nil ? "Create Space" : "Save Changes") {
                     if let space {
-                        model.updateSpace(space.id) { $0.name = name.trimmingCharacters(in: .whitespacesAndNewlines); $0.icon = icon; $0.colorHex = color }
-                    } else { model.addSpace(name: name.trimmingCharacters(in: .whitespacesAndNewlines), icon: icon, colorHex: color) }
+                        model.updateSpace(space.id) { $0.name = name.trimmingCharacters(in: .whitespacesAndNewlines); $0.icon = icon; $0.colorHex = color; $0.theme = theme }
+                    } else {
+                        let created = model.addSpace(name: name.trimmingCharacters(in: .whitespacesAndNewlines), icon: icon, colorHex: color)
+                        if theme != nil { model.updateSpace(created) { $0.theme = theme } }
+                    }
                     dismiss()
                 }.keyboardShortcut(.defaultAction).disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }.padding(28).frame(width: 450)
-            .onAppear { if let space { name = space.name; icon = space.icon; color = space.colorHex } }
+            .onAppear { if let space { name = space.name; icon = space.icon; color = space.colorHex; theme = space.theme } }
     }
 }
 

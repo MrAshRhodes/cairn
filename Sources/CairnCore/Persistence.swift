@@ -7,6 +7,7 @@ public enum ServiceError: LocalizedError {
     case database(String)
     case invalidDownload(String)
     case navigation(String)
+    case limit(String)
 
     public var errorDescription: String? {
         switch self {
@@ -15,7 +16,7 @@ public enum ServiceError: LocalizedError {
         case .unsupportedSchema(let version): return "Saved data uses unsupported schema \(version). It has not been changed."
         case .database(let reason): return "History database: \(reason)"
         case .invalidDownload(let reason): return "Download failed: \(reason)"
-        case .navigation(let reason): return reason
+        case .navigation(let reason), .limit(let reason): return reason
         }
     }
 }
@@ -103,6 +104,12 @@ extension Workspace {
                 throw ServiceError.invalidData("Invalid Space metadata or storage profile.")
             }
             try validateTabs(space.pinned + space.tabs + space.archive)
+            let folders = space.folders ?? []
+            guard folders.count <= 1_000, Set(folders.map(\.id)).count == folders.count,
+                  folders.allSatisfy({ !$0.name.isEmpty && $0.name.count <= TabFolder.maximumNameLength }),
+                  space.theme?.isValid ?? true else {
+                throw ServiceError.invalidData("Invalid folders or Space theme.")
+            }
             if let selected = space.selectedTabID,
                !(favorites + space.pinned + space.tabs).contains(where: { $0.id == selected }) {
                 throw ServiceError.invalidData("A selected tab is missing, archived, or belongs to another Space.")

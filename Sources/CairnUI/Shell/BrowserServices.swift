@@ -13,7 +13,7 @@ public struct BrowserIssue: Identifiable {
 }
 
 public enum BrowserSheet: String, Identifiable {
-    case preferences, downloads, boosts, archive, history, moduleTrust, shortcuts
+    case preferences, downloads, boosts, archive, history, moduleTrust, shortcuts, importer
     public var id: String { rawValue }
 }
 
@@ -33,6 +33,7 @@ public final class BrowserServices {
     public let settings: Settings
     public let downloads: DownloadsManager
     public let boosts: BoostStore
+    public let linkRules: LinkRuleStore
     public let modules: ModuleRegistry
     public let updater: UpdateController
     public let directory: URL
@@ -82,6 +83,7 @@ public final class BrowserServices {
         shortcutStore = ShortcutStore(directory: directory)
         siteSearch = SiteSearchStore(directory: directory)
         boosts = BoostStore(directory: directory.appendingPathComponent("Boosts", isDirectory: true))
+        linkRules = LinkRuleStore(url: directory.appendingPathComponent("link-rules.json"))
         downloads = DownloadsManager()
         updater = UpdateController()
     }
@@ -165,6 +167,7 @@ public final class BrowserServices {
         }
         model.faviconStore = FaviconStore(directory: directory.appendingPathComponent("Favicons", isDirectory: true))
         mediaKeys = MediaKeyController(model: model)
+        loadLinkRules()
         model.userScriptProvider = { [weak self] url in self?.boosts.scripts(for: url) ?? [] }
         modules.onError = { [weak self] error in self?.report("Module error", error: error) }
         BuiltinModules.all().forEach { modules.register($0) }
@@ -172,6 +175,7 @@ public final class BrowserServices {
         catch { report("Some modules could not be loaded", error: error) }
         modules.activate(model: model)
         loadShortcuts()
+        sweepImportStaging()
         model.onChange = { [weak self] in
             guard let self, self.workspaceWritable else { return }
             self.workspaceStore.scheduleSave(self.model.workspace)
@@ -351,6 +355,7 @@ public final class BrowserServices {
             .init(id: "ui.downloads", title: "Downloads", symbol: "arrow.down.circle", perform: { [weak self] _ in self?.sheet = .downloads }),
             .init(id: "ui.archive", title: "Archived Tabs", symbol: "archivebox", perform: { [weak self] _ in self?.sheet = .archive }),
             .init(id: "ui.history", title: "History", symbol: "clock", perform: { [weak self] _ in self?.sheet = .history }),
+            .init(id: "ui.import", title: "Import from Another Browser…", symbol: "square.and.arrow.down", perform: { [weak self] _ in self?.presentImporter() }),
             .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", perform: { [weak self] _ in self?.findPresented = true }),
         ]
         let local = localBase.map { command -> Command in

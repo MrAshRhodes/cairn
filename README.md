@@ -71,8 +71,12 @@ downloads.
 The implementation includes native Spaces, vertical tabs,
 favorites and pins, session restoration and archiving, a command bar with site
 search and a remappable keyboard map (with an Arc-compatible preset), split
-browsing with up to four panes, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
-explicit trust decision. Downloads are delegated to Cairn's URL-based downloader;
+browsing with up to four panes, find/zoom, local history, downloads, and CSS/JavaScript
+Boosts with an explicit trust decision. Newer pieces: sidebar folders and Space themes, a consent-based
+importer for Chromium-family browsers ([docs](docs/features/import.md)), a visual Boost
+editor with Zap and `.cairnboost` sharing ([docs](docs/features/boosts.md)), and link
+routing rules ([docs](docs/features/links.md); Peek overlay and quick window are not built
+yet). Downloads are delegated to Cairn's URL-based downloader;
 website cookies are not forwarded, so downloads requiring a website sign-in may fail.
 
 Automated tests cover the integrated services and legacy settings compatibility. The

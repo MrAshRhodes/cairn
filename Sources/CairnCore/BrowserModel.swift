@@ -6,6 +6,7 @@ public struct TabLocation: Equatable, Sendable {
     public var list: TabList
     public var spaceIndex: Int?
     public var index: Int
+    public init(list: TabList, spaceIndex: Int?, index: Int) { self.list = list; self.spaceIndex = spaceIndex; self.index = index }
 }
 
 /// Single source of truth for the browser's tabs, spaces and live engine tabs.
@@ -175,11 +176,16 @@ public final class BrowserModel: EngineTabDelegate {
 
     public func moveTab(_ id: UUID, to list: TabList, in spaceID: UUID? = nil, at index: Int? = nil) {
         guard let loc = locate(id), var moved = item(id) else { return }
+        if list == .favorites, loc.list != .favorites, workspace.favorites.count >= Workspace.maximumFavorites {
+            report(ServiceError.limit("Favorites hold at most \(Workspace.maximumFavorites) tabs. Remove one first."))
+            return
+        }
         let target = list == .favorites ? nil : (spaceIndex(spaceID) ?? loc.spaceIndex ?? selectedSpaceIndex)
         if list == .archive || target != loc.spaceIndex || (list == .favorites) != (loc.list == .favorites) {
             unloadTab(id)
         }
         remove(at: loc)
+        if list != .pinned || target != loc.spaceIndex || loc.list != .pinned { moved.folderID = nil }
         if list == .pinned || list == .favorites { moved.homeURL = moved.homeURL ?? moved.url } else { moved.homeURL = nil }
         insert(moved, list: list, spaceIndex: target, at: index)
         changed()
@@ -337,6 +343,7 @@ public final class BrowserModel: EngineTabDelegate {
             }
         }
         repairSplits()
+        for s in workspace.spaces.indices { repairFolders(in: s) }
         // A favorite is global metadata, not a global cookie jar. Recreate its live view on Space changes.
         for id in Array(liveTabs.keys) {
             guard let location = locate(id), location.list != .archive else { unloadTab(id); continue }
@@ -345,7 +352,7 @@ public final class BrowserModel: EngineTabDelegate {
         }
     }
 
-    private func update(_ id: UUID, _ body: (inout TabItem) -> Void) {
+    func update(_ id: UUID, _ body: (inout TabItem) -> Void) {
         guard let loc = locate(id) else { return }
         switch loc.list {
         case .favorites: body(&workspace.favorites[loc.index])

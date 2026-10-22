@@ -1,4 +1,6 @@
 import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
 import CairnBoosts
 
 @MainActor
@@ -16,6 +18,8 @@ struct BoostsView: View {
     @ViewState<Bool> private var newAfterDiscard = false
     @ViewState<Bool> private var closeAfterDiscard = false
     @ViewState<Bool> private var reviewingJavaScript = false
+    @ViewState<Bool> private var zapping = false
+    @ViewState<String?> private var notice = nil
     @Environment(\.dismiss) private var dismiss
 
     private var selected: Boost? { services.boosts.boosts.first { $0.id == selection } }
@@ -62,7 +66,11 @@ struct BoostsView: View {
                         if dirty { newAfterDiscard = true; closeAfterDiscard = false; discardConfirmation = true }
                         else { create() }
                     } label: { Label("New Boost", systemImage: "plus").frame(maxWidth: .infinity) }
-                        .padding(12).disabled(!services.boostsWritable)
+                        .padding(.horizontal, 12).padding(.top, 12).disabled(!services.boostsWritable)
+                    HStack {
+                        Button("Import…", action: importBoosts).disabled(!services.boostsWritable)
+                        Button("Export…", action: exportBoosts).disabled(services.boosts.boosts.isEmpty)
+                    }.padding(12)
                 }.frame(width: 190)
                 Divider()
                 editor
@@ -119,6 +127,7 @@ struct BoostsView: View {
                     .accessibilityLabel("Boost host patterns")
                 Text("example.com includes its subdomains. Use * for every website.")
                     .font(.caption2).foregroundStyle(.secondary)
+                BoostStyleEditor(boost: $draft, onZap: zap, zapping: zapping)
                 codeEditor("CSS", text: $draft.css)
                 codeEditor("JavaScript", text: $draft.js)
                 if !draft.js.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -145,6 +154,7 @@ struct BoostsView: View {
                 }
                 Label("Only run scripts you trust. They can access data on matching websites.",
                       systemImage: "exclamationmark.shield").font(.caption).foregroundStyle(.secondary)
+                if let notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
                 if let error { Text(error).font(.caption).foregroundStyle(.red).textSelection(.enabled) }
                 if savedMessage { Text("Saved. Open pages reloaded with your changes.").font(.caption).foregroundStyle(.secondary) }
                 HStack {
@@ -201,5 +211,57 @@ struct BoostsView: View {
             savedMessage = true
             services.refreshBoosts()
         } catch { self.error = error.localizedDescription }
+    }
+
+    private func exportBoosts() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "cairnboost") ?? .json]
+        panel.nameFieldStringValue = "Boosts.cairnboost"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let chosen = services.boosts.boosts.filter { selection == nil || $0.id == selection }
+            try BoostExchange.export(chosen).write(to: url, options: .atomic)
+            notice = "Exported \(chosen.count) Boost\(chosen.count == 1 ? "" : "s")."
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func importBoosts() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType(filenameExtension: "cairnboost") ?? .json, .json]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let result = try BoostExchange.importBoosts(from: Data(contentsOf: url))
+            for boost in result.boosts { try services.boosts.add(boost) }
+            services.refreshBoosts()
+            error = nil
+            notice = "Imported \(result.boosts.count) Boost\(result.boosts.count == 1 ? "" : "s")."
+                + (result.needsReview.isEmpty ? "" : " \(result.needsReview.count) with scripts or remote resources are disabled until you review them.")
+            if let first = result.boosts.first { choose(first.id) }
+        } catch { self.error = error.localizedDescription }
+    }
+
+    private func zap() {
+        guard let tab = services.activeEngineTab else { error = "Open a page to zap an element."; return }
+        zapping = true; error = nil
+        tab.evaluateJavaScript(ZapPickerScript.pickerSource, completion: nil)
+        Task { @MainActor in
+            defer { zapping = false }
+            for _ in 0..<240 {
+                try? await Task.sleep(for: .milliseconds(250))
+                let value: String? = await withCheckedContinuation { continuation in
+                    tab.evaluateJavaScript(ZapPickerScript.pollSource) { result in
+                        if case .success(let any) = result { continuation.resume(returning: any as? String) }
+                        else { continuation.resume(returning: nil) }
+                    }
+                }
+                guard let value else { continue }
+                if value.isEmpty { return }
+                guard ZapSelector.isSafe(value) else { error = "That element can't be hidden safely."; return }
+                var list = draft.zapped ?? []
+                if !list.contains(value), list.count < ZapSelector.maximumPerBoost { list.append(value) }
+                draft.zapped = list
+                return
+            }
+        }
     }
 }
