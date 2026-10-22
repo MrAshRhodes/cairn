@@ -98,7 +98,7 @@ struct DownloadsView: View {
     @ViewState<String?> private var inputError = nil
     var body: some View {
         VStack(spacing: 0) {
-            SheetHeader(title: "Downloads", subtitle: "Direct-link downloads · you choose where each file is saved.")
+            SheetHeader(title: "Downloads", subtitle: "Files from pages keep your sign-in · you choose where each file is saved.")
             HStack {
                 TextField("Paste an HTTP(S) download link", text: $link)
                     .textFieldStyle(.roundedBorder).accessibilityLabel("Download link")
@@ -112,9 +112,9 @@ struct DownloadsView: View {
                         .font(.title2).foregroundStyle(.secondary).frame(width: 32)
                     VStack(alignment: .leading, spacing: 7) {
                         Text(item.filename).font(.callout.weight(.medium)).lineLimit(1)
-                        if item.status == .downloading {
+                        if item.status.isActive {
                             ProgressView(value: item.progress).accessibilityLabel("Download progress")
-                            Text("\(Int(item.progress * 100))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                            Text(DownloadsView.progressText(item)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                         } else {
                             Text(item.errorMessage ?? item.status.rawValue.capitalized)
                                 .font(.caption).foregroundStyle(item.status == .failed ? Color.red : .secondary)
@@ -123,29 +123,49 @@ struct DownloadsView: View {
                         Text(item.url.host ?? "").font(.caption2).foregroundStyle(.tertiary)
                     }
                     Spacer()
-                    if item.status == .downloading {
+                    if item.status.isActive {
+                        if item.engineID != nil {
+                            if item.status == .paused {
+                                Button("Resume") { services.downloads.resume(item.id) }
+                            } else {
+                                Button("Pause") { services.downloads.pause(item.id) }
+                            }
+                        }
                         Button("Cancel") { services.downloads.cancel(item.id) }
                     } else if item.status == .completed {
                         Button("Show in Finder") { services.downloads.reveal(item.id) }
-                    } else if item.status == .failed || item.status == .cancelled {
+                    } else if item.engineID == nil && (item.status == .failed || item.status == .cancelled) {
                         Button("Retry") { services.downloads.start(url: item.url, suggestedFilename: item.filename) }
                     }
                 }.padding(.vertical, 8)
             }.overlay {
                 if services.downloads.items.isEmpty {
-                    ContentUnavailableView("No direct-link downloads", systemImage: "arrow.down.circle",
-                        description: Text("Paste a public download link above. Downloads started from a page also appear here."))
+                    ContentUnavailableView("No downloads", systemImage: "arrow.down.circle",
+                        description: Text("Files you download from a page appear here, or paste a public download link above."))
                 }
             }
             HStack {
-                Text("Downloads are requested again from their URL without your website sign-ins, so files that need you to be signed in may fail.")
+                Text("Pasted links are fetched without your website sign-ins. Files downloaded from a page use the page\u{2019}s session.")
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
                 Button("Clear Finished") { services.downloads.clearFinished() }
-                    .disabled(!services.downloads.items.contains { $0.status != .downloading })
+                    .disabled(!services.downloads.items.contains { !$0.status.isActive })
             }.padding(16)
         }.frame(width: 650, height: 480)
     }
+    static func progressText(_ item: DownloadItem) -> String {
+        let percent = item.totalBytes > 0 || item.progress > 0 ? "\(Int(item.progress * 100))%" : "Starting…"
+        var parts = [percent]
+        if item.engineID != nil, item.receivedBytes > 0 {
+            let format = ByteCountFormatStyle(style: .file)
+            parts.append(item.totalBytes > 0 ? "\(item.receivedBytes.formatted(format)) of \(item.totalBytes.formatted(format))"
+                                              : item.receivedBytes.formatted(format))
+            if item.status == .downloading, item.bytesPerSecond > 0 { parts.append("\(item.bytesPerSecond.formatted(format))/s") }
+        }
+        if item.status == .paused { parts.append("Paused") }
+        return parts.joined(separator: " · ")
+    }
+
     private func download() {
         let input = link.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: input), URLResolver.isWebURL(url) else {
