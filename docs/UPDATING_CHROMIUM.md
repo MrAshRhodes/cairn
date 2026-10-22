@@ -1,9 +1,16 @@
 # Chromium / CEF engine
 
-**`make app` builds the experimental Chromium app; published v0.1.0 downloads use
-WebKit.** This is not a claim of equivalence to Google Chrome. A normal `scripts/swiftw
-build` neither downloads CEF nor compiles/links its bridge, wrapper or helpers.
-Use `make webkit-app` for a system-WebKit-only application bundle.
+**Chromium is the default engine for local `make` builds and `scripts/bundle-app.sh`;
+published v0.1.0 downloads still use WebKit.** This is not a claim of equivalence to
+Google Chrome. `make build`, `make app` and `make run` prepare CEF for the host
+architecture (`make cef`, which runs `python3 engine/tool.py fetch` and `build`)
+before building with `CAIRN_WITH_CHROMIUM=1`. `scripts/bundle-app.sh` packages
+Chromium by default but never downloads CEF; run `make cef` first. Bare
+`scripts/swiftw build`/`test` stay CEF-free unless `CAIRN_WITH_CHROMIUM=1` is set:
+they neither download CEF nor compile/link its bridge, wrapper or helpers.
+`scripts/release.sh` and the release workflow keep `CAIRN_WITH_CHROMIUM=0`. Use
+`make webkit-app` (or `make webkit-build`/`make webkit-run`), or
+`CAIRN_WITH_CHROMIUM=0 scripts/bundle-app.sh`, for system WebKit only.
 Downloaded binaries and build caches stay in ignored `engine/cef/` and
 `engine/.cache/`. No Arc executable, private source, branding or resources are used.
 
@@ -55,19 +62,21 @@ full Xcode; the supplied Makefiles path also compiles with the verified macOS 26
 CLT-only Swift 6.4 environment. Ninja is not required.
 
 ```sh
-# Select arm64 or x86_64 explicitly, or omit --arch for the host architecture.
+# Host architecture: prepare CEF, build and bundle in one step (`make cef` only prepares CEF):
+make app
+# Or step by step. Select arm64 or x86_64 explicitly, or omit --arch for the host.
 python3 engine/tool.py fetch --arch arm64
 python3 engine/tool.py build --arch arm64
 CAIRN_WITH_CHROMIUM=1 scripts/swiftw build
 # Explicit product for release scripts that otherwise build only Cairn:
 CAIRN_WITH_CHROMIUM=1 scripts/swiftw build --product CairnHelper
-# Or build and package both matching products:
-make app
 ```
 
-Bundled builds select Chromium for fresh settings when it is registered. Saved
-engine choices take precedence. Existing users can select Chromium in Settings;
-bundling it must not silently migrate their WebKit preference or browsing data.
+Bundled Chromium builds select Chromium unless the user has explicitly chosen an
+engine in Settings. Saved settings without an explicit choice, including legacy
+files written by WebKit-only builds (which recorded `webkit` implicitly), follow the
+running build's default engine. An explicit WebKit choice is preserved, and
+switching engines never migrates browsing data between engine profiles.
 The bundler builds the main app and helper with the same architecture/configuration
 and passes the resolved helper path, rather than assuming SwiftPM's generic debug path.
 
@@ -274,7 +283,7 @@ python3 engine/smoke.py --identity 'Developer ID Application: YOUR IDENTITY'
 # Explicitly weaker local signing, for functional debugging ONLY:
 python3 engine/smoke.py --development-ad-hoc
 
-# Always verify the default WebKit-only build still succeeds:
+# Always verify the WebKit-only build still succeeds (same as `make webkit-build`):
 scripts/swiftw build
 ```
 

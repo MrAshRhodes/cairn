@@ -18,18 +18,31 @@ public_key = "11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="
 signature = "5VZDAMNgrHKQhuLMgG6CioSHfx645dl02HPgZSJJAVVfuIIVkKM7rMYeOXAc+bRr0lv18FlbviRlUUFDjnoQCw=="
 environment = dict(os.environ, VERSION="0.1.0", BUILD_NUMBER="1", ARCH="universal",
                    SIGNING_IDENTITY="-", SPARKLE_PUBLIC_ED_KEY=public_key,
+                   CAIRN_WITH_CHROMIUM="0",
                    CAIRN_ARCHIVE_SIGNATURE=signature)
 subprocess.run([sys.executable, "Resources/ReleaseTools/bundle.py", "configure", str(app)],
                env=environment, check=True)
 info = plistlib.loads((contents / "Info.plist").read_bytes())
 assert info["SUPublicEDKey"] == public_key
 assert info["CairnSigningMode"] == "ad-hoc"
+assert info["CairnBrowserEngine"] == "webkit"
 assert info["CFBundleVersion"] == "1"
 assert info["SURequireSignedFeed"] and info["SUVerifyUpdateBeforeExtraction"]
 assert info["SUSignedFeedFailureExpirationInterval"] == 0
 assert info["CFBundleURLTypes"][0]["CFBundleURLSchemes"] == ["http", "https"]
 assert info["CFBundleDocumentTypes"][0]["LSItemContentTypes"] == ["public.html", "public.xhtml"]
 assert info["NSAppTransportSecurity"] == {"NSAllowsArbitraryLoadsInWebContent": True}
+
+chromium_environment = dict(environment, ARCH="arm64")
+del chromium_environment["CAIRN_WITH_CHROMIUM"]
+subprocess.run([sys.executable, "Resources/ReleaseTools/bundle.py", "configure", str(app)],
+               env=chromium_environment, check=True)
+assert plistlib.loads((contents / "Info.plist").read_bytes())["CairnBrowserEngine"] == "chromium"
+invalid_engine = subprocess.run(
+    [sys.executable, "Resources/ReleaseTools/bundle.py", "configure", str(app)],
+    env=dict(environment, CAIRN_WITH_CHROMIUM="invalid"), capture_output=True)
+assert invalid_engine.returncode != 0, "Invalid engine configuration must fail"
+(contents / "Info.plist").write_bytes(plistlib.dumps(info))
 
 
 def write_archive():

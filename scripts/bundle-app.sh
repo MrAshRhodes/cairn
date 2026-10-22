@@ -7,17 +7,18 @@ export VERSION="${VERSION:-0.1.0}"
 export BUILD_NUMBER="${BUILD_NUMBER:-${VERSION}}"
 export SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-}"
 export SIGNING_IDENTITY="${SIGNING_IDENTITY:--}"
+export CAIRN_WITH_CHROMIUM="${CAIRN_WITH_CHROMIUM:-1}"
 case "$ARCH" in
   arm64|x86_64) arches=("$ARCH") ;;
   universal) arches=(arm64 x86_64) ;;
   *) echo "ERROR: ARCH must be arm64, x86_64 or universal" >&2; exit 1 ;;
 esac
 case "$CONFIGURATION" in debug|release) ;; *) echo "Invalid CONFIGURATION" >&2; exit 1 ;; esac
-case "${CAIRN_WITH_CHROMIUM:-0}" in
+case "$CAIRN_WITH_CHROMIUM" in
   0) ;;
   1)
     [[ "$ARCH" != universal ]] || { echo "ERROR: Chromium packaging requires a single architecture" >&2; exit 1; }
-    [[ -f engine/bundle.py ]] || { echo "ERROR: optional Chromium bundler is not installed" >&2; exit 1; }
+    [[ -f engine/bundle.py ]] || { echo "ERROR: Chromium bundler is not installed" >&2; exit 1; }
     export CAIRN_CEF_ARCH="$ARCH"
     ;;
   *) echo "CAIRN_WITH_CHROMIUM must be 0 or 1" >&2; exit 1 ;;
@@ -41,7 +42,7 @@ for arch in "${arches[@]}"; do
   scripts/swiftw build "${build_args[@]}"
   bin="$(scripts/swiftw build "${build_args[@]}" --show-bin-path)"
   binaries+=("$bin/Cairn")
-  if [[ "${CAIRN_WITH_CHROMIUM:-0}" == 1 ]]; then
+  if [[ "$CAIRN_WITH_CHROMIUM" == 1 ]]; then
     scripts/swiftw build -c "$CONFIGURATION" --arch "$arch" --product CairnHelper
   fi
 done
@@ -60,7 +61,7 @@ swift Resources/ReleaseTools/Icon.swift "$work/Cairn.iconset"
 iconutil -c icns "$work/Cairn.iconset" -o "$app/Contents/Resources/Cairn.icns"
 printf 'APPL????' > "$app/Contents/PkgInfo"
 ditto .build/artifacts/sparkle/Sparkle/LICENSE "$app/Contents/Resources/Sparkle-LICENSE"
-if [[ "${CAIRN_WITH_CHROMIUM:-0}" == 1 ]]; then
+if [[ "$CAIRN_WITH_CHROMIUM" == 1 ]]; then
   python3 engine/bundle.py --app "$app" --configuration "$CONFIGURATION" --arch "$ARCH" --helper "$bin/CairnHelper"
   [[ -f engine/entitlements/renderer.plist && -f engine/entitlements/helper.plist ]] || {
     echo "ERROR: Chromium helper entitlements missing" >&2; exit 1;
@@ -80,7 +81,7 @@ fi
 sign_nested() {
   local target="$1"
   local metadata=("--preserve-metadata=identifier,entitlements")
-  if [[ "${CAIRN_WITH_CHROMIUM:-0}" == 1 ]]; then
+  if [[ "$CAIRN_WITH_CHROMIUM" == 1 ]]; then
     case "$target" in
       *"Cairn Helper (Renderer).app"*|*"Cairn Helper (GPU).app"*)
         metadata=(--preserve-metadata=identifier --entitlements engine/entitlements/renderer.plist) ;;

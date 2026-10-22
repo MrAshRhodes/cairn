@@ -2,6 +2,8 @@
 set +x
 set -euo pipefail
 cd "$(dirname "$0")/.."
+# Public releases retain the WebKit gate until CEF release-security validation is complete.
+export CAIRN_WITH_CHROMIUM="${CAIRN_WITH_CHROMIUM:-0}"
 [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]] || {
   echo "ERROR: release requires SPARKLE_PUBLIC_ED_KEY." >&2; exit 1;
 }

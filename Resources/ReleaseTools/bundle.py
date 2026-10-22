@@ -38,6 +38,9 @@ def configure(app):
                           .replace("@SPARKLE_PUBLIC_ED_KEY@", key))
     info["CairnBuildArchitecture"] = os.environ["ARCH"]
     info["CairnSigningMode"] = "ad-hoc" if os.environ["SIGNING_IDENTITY"] == "-" else "developer-id"
+    chromium = os.environ.get("CAIRN_WITH_CHROMIUM", "1")
+    require(chromium in {"0", "1"}, "CAIRN_WITH_CHROMIUM must be 0 or 1")
+    info["CairnBrowserEngine"] = "chromium" if chromium == "1" else "webkit"
     with (app / "Contents/Info.plist").open("wb") as stream:
         plistlib.dump(info, stream, sort_keys=False)
 
@@ -75,8 +78,17 @@ def verify(app):
     require((framework / "Versions/Current").is_symlink(), "Sparkle symlinks were not preserved")
     require((framework / "Sparkle").is_file(), "Sparkle runtime binary is missing")
     require((app / "Contents/Resources/Cairn.icns").is_file(), "app icon is missing")
+    if info["CairnBrowserEngine"] == "chromium":
+        cef = app / "Contents/Frameworks/Chromium Embedded Framework.framework"
+        require((cef / "Chromium Embedded Framework").is_file(), "Chromium runtime binary is missing")
+        for suffix in ["", " (Alerts)", " (GPU)", " (Plugin)", " (Renderer)"]:
+            name = "Cairn Helper" + suffix
+            helper = app / "Contents/Frameworks" / (name + ".app")
+            require((helper / "Contents/MacOS" / name).is_file(), f"{name} executable is missing")
+        for name in ["cef.lock.json", "CEF-LICENSE.txt"]:
+            require((app / "Contents/Resources" / name).is_file(), f"Chromium resource is missing: {name}")
     subprocess.run(["plutil", "-lint", str(app / "Contents/Info.plist")], check=True)
-    print(f"Verified native bundle, {wanted} executable, Sparkle linkage and relative rpath.")
+    print(f"Verified {info['CairnBrowserEngine']} bundle, {wanted} executable, Sparkle linkage and relative rpath.")
 
 
 if __name__ == "__main__":

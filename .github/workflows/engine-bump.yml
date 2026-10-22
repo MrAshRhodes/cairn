@@ -87,5 +87,5 @@ jobs:
     steps:
       - name: Require maintainer attention
         run: |
-          echo "::error::SECURITY GAP remains in the pinned Chromium engine. WebKit is the default; review the maintenance summary."
+          echo "::error::SECURITY GAP remains in the pinned Chromium engine. Public Chromium releases remain gated; review the maintenance summary."
           exit 1

@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 import Testing
 import SQLite3
 @testable import CairnCore
@@ -40,6 +41,57 @@ import SQLite3
         settings.engineKind = .webkit
         try settings.save(to: file)
         #expect(try Settings.load(from: file, defaultEngineKind: .chromium).engineKind == .webkit)
+    }
+
+    @Test func legacySettingsWithoutExplicitFlagFollowTheBundledEngine() throws {
+        let directory = try TestDirectory()
+        let file = directory.file("settings.json")
+        let legacy = """
+        {"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s","engineKind":"webkit",
+        "autoArchiveAfterHours":24,"restoreSessionOnLaunch":false,"sidebarWidth":300}
+        """
+        try Data(legacy.utf8).write(to: file)
+        let settings = try Settings.load(from: file, defaultEngineKind: .chromium)
+        #expect(settings.engineKind == .chromium)
+        #expect(!settings.engineKindIsExplicit)
+        #expect(settings.searchTemplate == "https://duckduckgo.com/?q=%s")
+        #expect(settings.autoArchiveAfterHours == 24)
+        #expect(!settings.restoreSessionOnLaunch)
+        #expect(settings.sidebarWidth == 300)
+        #expect(try Settings.load(from: file, defaultEngineKind: .webkit).engineKind == .webkit)
+    }
+
+    @Test func implicitWebKitDefaultSavedByWebKitBuildDoesNotStickInChromiumBuild() throws {
+        let directory = try TestDirectory()
+        let file = directory.file("settings.json")
+        let webKitBuild = try Settings.load(from: file, defaultEngineKind: .webkit)
+        webKitBuild.sidebarWidth = 320
+        try webKitBuild.save(to: file)
+        let chromiumBuild = try Settings.load(from: file, defaultEngineKind: .chromium)
+        #expect(chromiumBuild.engineKind == .chromium)
+        #expect(!chromiumBuild.engineKindIsExplicit)
+        #expect(chromiumBuild.sidebarWidth == 320)
+    }
+
+    @Test func explicitEngineChoiceSurvivesEitherBuild() throws {
+        let directory = try TestDirectory()
+        let file = directory.file("settings.json")
+        let settings = try Settings.load(from: file, defaultEngineKind: .chromium)
+        #expect(!settings.engineKindIsExplicit)
+        var observedChange = false
+        withObservationTracking { _ = settings.engineKind } onChange: { observedChange = true }
+        settings.engineKind = .webkit
+        #expect(observedChange)
+        #expect(settings.engineKindIsExplicit)
+        try settings.save(to: file)
+        let webKitBuild = try Settings.load(from: file, defaultEngineKind: .webkit)
+        #expect(webKitBuild.engineKind == .webkit)
+        #expect(webKitBuild.engineKindIsExplicit)
+        try webKitBuild.save(to: file)
+        let chromiumBuild = try Settings.load(from: file, defaultEngineKind: .chromium)
+        #expect(chromiumBuild.engineKind == .webkit)
+        #expect(chromiumBuild.engineKindIsExplicit)
+        #expect(!Settings(engineKind: .chromium).engineKindIsExplicit)
     }
 
     @Test func invalidSettingsCannotReplaceGoodData() throws {

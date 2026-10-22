@@ -78,22 +78,30 @@ workflow; site-only changes never create a browser release.
 ## Local development (no Apple account)
 
 Requires macOS 14+, Swift 6+, Python 3, Command Line Tools (or Xcode), and ShellCheck.
-No Node installation is required. `scripts/swiftw` supports CLT-only installations.
+Chromium packaging also requires CMake 3.21+ and Python 3.12+ (or a Python with
+`tarfile.data_filter`). No Node installation is required. `scripts/swiftw` supports
+CLT-only installations.
 
 ```sh
 scripts/swiftw test
 scripts/test-release.sh
-ARCH=arm64 scripts/bundle-app.sh
+make cef
+scripts/bundle-app.sh
 scripts/make-dmg.sh
 open dist/Cairn.app
 ```
 
-`make webkit-app` is the WebKit bundle shortcut. `make app` and `make dmg` now
-build the experimental Chromium variant, which requires the separately prepared
-CEF dependency. Use `ARCH=x86_64` or `ARCH=universal` with the WebKit bundle script
-for an Intel or universal binary, and `CONFIGURATION=debug` for a debug build.
-The default architecture is the host's architecture. Universal packaging builds
-each slice independently, then combines the executable with `lipo`.
+`scripts/bundle-app.sh` packages the experimental Chromium variant by default
+(`CAIRN_WITH_CHROMIUM=1`) for a single architecture, the host's unless `ARCH` is set.
+It never downloads CEF: run `make cef` first. A missing or stale engine fails the
+build; there is no WebKit fallback. `make app`, `make run` and `make dmg` prepare
+CEF and bundle in one step. For WebKit packaging, including Intel-on-Apple-Silicon
+or universal binaries, set `CAIRN_WITH_CHROMIUM=0` explicitly (for example
+`CAIRN_WITH_CHROMIUM=0 ARCH=universal scripts/bundle-app.sh`); `make webkit-app`
+is the host-architecture shortcut. `scripts/release.sh` and the release workflow
+keep `CAIRN_WITH_CHROMIUM=0`. Use `CONFIGURATION=debug` for a debug build.
+Universal WebKit packaging builds each slice independently, then combines the
+executable with `lipo`.
 
 Without `SIGNING_IDENTITY`, everything is explicitly **ad-hoc signed**, not Developer
 ID signed, not notarized, and not trusted by Gatekeeper for public distribution.
@@ -260,7 +268,7 @@ developer-preview label does not imply notarization or completed GUI verificatio
 For individual packaging steps, while the required signing environment is available:
 
 ```sh
-VERSION=0.1.0 BUILD_NUMBER=0.1.0 ARCH=universal scripts/bundle-app.sh
+CAIRN_WITH_CHROMIUM=0 VERSION=0.1.0 BUILD_NUMBER=0.1.0 ARCH=universal scripts/bundle-app.sh
 ditto -c -k --sequesterRsrc --keepParent dist/Cairn.app dist/Cairn-0.1.0-universal.zip
 scripts/make-appcast.sh dist/Cairn-0.1.0-universal.zip dist/Cairn.app dist/appcast.xml
 scripts/make-dmg.sh dist/Cairn.app dist/Cairn-0.1.0-universal.dmg
@@ -299,8 +307,13 @@ keychain or the user's keychain search list. Do not enable shell tracing around 
 
 ## GitHub Actions (maintainer setup, not automatic secret provisioning)
 
-CI tests on macOS Apple Silicon and Intel, validates workflows/shell scripts, and
-produces clearly ad-hoc DMGs without any secrets.
+CI tests on macOS Apple Silicon and Intel, validates workflows/shell scripts, prepares
+CEF with `make cef`, runs the development ad-hoc Chromium smoke test
+(`engine/smoke.py --development-ad-hoc`), and packages a clearly ad-hoc,
+single-architecture Chromium DMG per runner without any secrets. Those DMGs are
+short-lived development artifacts, not releases. This is a functional Chromium
+check, **not** a Developer ID, notarization, hardened-runtime or CEF security-gap
+gate.
 
 **Automatic release signing/publication is not configured for v0.1.0.** Private
 signing material has not been uploaded to GitHub and is not uploaded by the local
@@ -340,13 +353,22 @@ Manual dispatch must select an existing release tag; dispatch from a branch does
 The architecture input defaults to `universal`. Do not mix older manually published
 versions into GitHub's `latest` release or overwrite release assets.
 
-## Optional Chromium assembly
+## Chromium assembly
 
-The default build never downloads or bundles Chromium. Once the optional engine has
-been fetched/built following `engine/` documentation:
+`scripts/bundle-app.sh` packages Chromium by default; local `make build`, `make app`,
+`make run` and `make dmg` also fetch, verify and build CEF for the host architecture
+first. The bundler itself never downloads CEF. `scripts/release.sh` and the release
+workflow keep `CAIRN_WITH_CHROMIUM=0`, so published releases do not include Chromium.
+Prepare the engine for the architecture being packaged:
 
 ```sh
-CAIRN_WITH_CHROMIUM=1 ARCH=arm64 scripts/bundle-app.sh
+# Host architecture:
+make cef
+scripts/bundle-app.sh
+# Explicit single architecture; prepare the matching engine first:
+python3 engine/tool.py fetch --arch arm64
+python3 engine/tool.py build --arch arm64
+ARCH=arm64 scripts/bundle-app.sh
 ```
 
 The script sets `CAIRN_CEF_ARCH` from `ARCH` for the gated SwiftPM manifest and calls
@@ -362,8 +384,9 @@ The CEF bundler currently requires a single architecture and rejects universal.
 Ad-hoc development signing is intentionally not hardened; a hardened CEF distribution
 requires all nested code to use the same Developer ID identity. Library validation is
 never disabled to conceal mismatched Team IDs.
-Chromium has its own security/update cadence; the default
-release workflow intentionally builds WebKit only until the engine is release-ready.
+Chromium has its own security/update cadence; `scripts/release.sh` and the release
+workflow intentionally build WebKit (`CAIRN_WITH_CHROMIUM=0`) until the engine is
+release-ready.
 
 ## Validation boundaries
 

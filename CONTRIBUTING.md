@@ -4,7 +4,11 @@ This guide is for contributors adding a browser feature without coupling it to
 one rendering engine.
 
 Start with the [functional specification](docs/reference/functional-spec.md).
-Build with `make build`, run `make test`, and use `make app` for a bundled app.
+Build with `make build`, run `make test`, and use `make app` (or `make run`) for a
+bundled app. These Chromium targets prepare the pinned CEF dependency
+automatically and need CMake 3.21+ and Python 3.12+; `make test` uses WebKit
+only. Use `make webkit-build`, `make webkit-run` or `make webkit-app` when you
+need a WebKit-only build without CEF.
 Use Swift Testing, not XCTest, so tests also work on a Command Line Tools-only
 installation.
 

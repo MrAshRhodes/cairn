@@ -82,7 +82,9 @@ struct BrowserServicesTests {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let file = directory.appendingPathComponent("settings.json")
-        try Settings(engineKind: .chromium).save(to: file)
+        let saved = Settings()
+        saved.engineKind = .chromium
+        try saved.save(to: file)
         let registry = EngineRegistry()
         registry.register(.webkit) { TestEngine() }
         let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
@@ -91,7 +93,32 @@ struct BrowserServicesTests {
         #expect(services.settings.engineKind == .chromium)
         #expect(services.issues.contains { $0.title == "Engine unavailable" })
         try services.flush()
-        #expect(try Settings.load(from: file).engineKind == .chromium)
+        let reloaded = try Settings.load(from: file)
+        #expect(reloaded.engineKind == .chromium)
+        #expect(reloaded.engineKindIsExplicit)
+    }
+
+    @Test func chromiumBuildReplacesImplicitWebKitDefaultFromOlderBuild() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-engine-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("settings.json")
+        let legacy = """
+        {"schemaVersion":1,"searchTemplate":"https://duckduckgo.com/?q=%s","engineKind":"webkit",
+        "autoArchiveAfterHours":12,"restoreSessionOnLaunch":true,"sidebarWidth":300}
+        """
+        try Data(legacy.utf8).write(to: file)
+        let registry = EngineRegistry()
+        registry.register(.webkit) { TestEngine() }
+        registry.register(.chromium) { TestEngine(kind: .chromium) }
+        let services = try BrowserServices.bootstrap(registry: registry, directory: directory)
+        defer { services.shutdown() }
+        #expect(services.settings.engineKind == .chromium)
+        #expect(!services.settings.engineKindIsExplicit)
+        #expect(services.model.engine.kind == .chromium)
+        #expect(services.settings.sidebarWidth == 300)
+        #expect(!services.issues.contains { $0.title == "Engine unavailable" })
     }
 
     @Test func newTabAndEditAddressAreDistinct() {

@@ -36,30 +36,34 @@ which is separate from Apple Developer ID signing.
 ## Build on your Mac
 
 Requires macOS 14 or later, Swift 6, and Apple's Command Line Tools or Xcode.
-The first build downloads Sparkle through Swift Package Manager. Chromium app
-builds additionally require CMake 3.21+ and Python 3.12+ (or a Python version with
+The first build downloads Sparkle through Swift Package Manager. Local builds use
+**Chromium (CEF)** by default for the best website compatibility, so they also
+require CMake 3.21+ and Python 3.12+ (or a Python version with
 `tarfile.data_filter`). Read the [CEF security status](docs/UPDATING_CHROMIUM.md)
 before preparing its substantial native dependency:
 
 ```sh
 git clone https://github.com/mrashrhodes/cairn.git
 cd cairn
-make build
-make test
-python3 engine/tool.py fetch
-python3 engine/tool.py build
-make app
+make app    # or `make run` to build and open it
 ```
 
-The generated `dist/Cairn.app` bundles **Chromium and its matching helper processes**
-for your Mac's architecture. Fresh settings select Chromium. If you previously
-selected WebKit, choose Chromium in Settings; an existing engine preference is
-never silently overwritten. Follow any restart instruction shown there.
+`make build`, `make app` and `make run` prepare CEF automatically: the first run
+downloads and verifies the pinned archive (about 130 MB) and builds its wrapper for
+your Mac's architecture; later runs reuse the verified cache. The generated
+`dist/Cairn.app` bundles **Chromium and its matching helper processes**. Settings
+saved without an explicit engine choice, including those written by older
+WebKit-only builds, follow the bundled engine, so the app opens with Chromium.
+If you explicitly chose WebKit in Settings, that choice is kept; switch it back
+there and follow any restart instruction shown.
 
-For the smaller, system-WebKit-only app, skip CEF preparation and run
-`make webkit-app` instead. `make build`, `make test`, and `make run` remain
-WebKit-only unless explicitly built with Chromium enabled. CEF must run from a
-proper application bundle, not an unbundled `swift run`.
+CEF must run from a proper application bundle, so `make run` launches
+`dist/Cairn.app` rather than an unbundled `swift run`. `scripts/bundle-app.sh` also
+packages Chromium by default once `make cef` has prepared the engine. For the
+smaller, system-WebKit-only alternative, which needs no CEF, use `make webkit-app`,
+`make webkit-run` or `make webkit-build` (or `CAIRN_WITH_CHROMIUM=0
+scripts/bundle-app.sh`, required for universal packaging). `make test` runs the
+WebKit-based test suite and does not prepare CEF.
 
 A development build is
 ad-hoc signed unless you configure your own Developer ID signing. Ad-hoc signing
@@ -96,15 +100,16 @@ configuration. It does not install or change your system toolchain.
 
 ## Engines and security updates
 
-The published download and WebKit-only build use **system WebKit**, updated by
-Apple through macOS/Safari updates. Keep macOS and its browser components current.
-
-The experimental **Chromium Embedded Framework (CEF)** app build has separate dependency,
-helper-process, packaging and security requirements. It is not updated by
-installing Google Chrome. Follow the [Chromium maintenance guide](docs/UPDATING_CHROMIUM.md);
+**Chromium Embedded Framework (CEF)** is the recommended engine for website
+compatibility and the default for local builds. It remains **experimental**: it
+has separate dependency, helper-process, packaging and security requirements, and
+it is not updated by installing Google Chrome. Follow the [Chromium maintenance guide](docs/UPDATING_CHROMIUM.md);
 do not enable an old CEF build just because it compiles. A version-monitoring
 workflow cannot guarantee upstream fixes exist or ship them without a release.
 The current pin trails Chrome stable; public Chromium distribution remains gated.
+
+The published download and WebKit-only builds use **system WebKit**, updated by
+Apple through macOS/Safari updates. Keep macOS and its browser components current.
 
 Application auto-updates require signed Sparkle releases and the matching public
 key embedded in the installed application. An unconfigured source build must

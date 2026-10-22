@@ -94,7 +94,8 @@ public struct PreferencesView: View {
                      : "Restart Cairn to use the selected engine. Your open pages keep using \(model.engine.displayName) until then.")
                     .font(.caption).foregroundStyle(.secondary)
                 if !services.availableEngines.contains(.chromium) {
-                    Text("Chromium is optional and is not included in this build.").font(.caption).foregroundStyle(.secondary)
+                    Text("Chromium is recommended for the best website compatibility but is not included in this build.")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             if !services.settingsWritable {

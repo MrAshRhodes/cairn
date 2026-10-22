@@ -2,7 +2,7 @@
 import PackageDescription
 import Foundation
 
-// The default build never needs Chromium. Opt in with: CAIRN_WITH_CHROMIUM=1 scripts/swiftw build
+// App builds use Chromium via make/bundle-app.sh; bare SwiftPM keeps unit tests independent of CEF.
 let withChromium = ProcessInfo.processInfo.environment["CAIRN_WITH_CHROMIUM"] == "1"
 
 var extraTargets: [Target] = []
