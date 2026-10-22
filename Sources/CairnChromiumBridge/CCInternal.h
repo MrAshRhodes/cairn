@@ -4,7 +4,8 @@
 // File map (SwiftPM compiles every .mm below this directory; adding a file needs no manifest edit):
 //   include/CairnChromiumBridge.h  public API for Swift. Additive changes only, each in its own slot.
 //   CCInternal.h                   shared state, helpers, the CCChromiumTab class extension, Client.
-//   CCRuntime.mm                   CEF start/stop, message pump, request contexts, profile clearing.
+//   CCRuntime.mm                   CEF start/stop, message pump, request contexts.
+//   CCRuntime+SiteData.mm          clearing site data, deleting profiles, orphan GC.
 //   CCTab.mm                       CCChromiumTab: navigation, DevTools calls, scripts, find, snapshot.
 //   CCTab+<Feature>.mm             optional per-feature tab commands, written as categories.
 //   CCClient.mm                    Client constructor: the registration list of CEF handler families.
@@ -77,11 +78,18 @@ extern bool stopping;
 extern int pendingBrowsers;
 extern std::map<std::string, CefRefPtr<CefRequestContext>> contexts;
 extern std::map<int, CefRefPtr<Client>> clients;
+// Browsers being created per request-context key; a private context must outlive them.
+extern std::map<std::string, int> creating;
 
 NSString *String(const CefString& value);
 NSError *Failure(NSString *message);
 CefRefPtr<CefRequestContext> Context(NSString *profile, bool ephemeral);
 void FinishShutdown();
+NSString *ProfileRoot();
+// CCRuntime+SiteData.mm: deferred deletions at launch, and the per-profile list of visited origins.
+void ApplyPendingProfileWork(NSString *root);
+void LoadTrackedOrigins(NSString *profile);
+void TrackOrigin(const std::string& contextKey, const CefString& url);
 
 // One per browser. CEF sees a plain CefClient that hands out one small handler object per family.
 // Handlers are created in CCClient.mm and implemented in Handlers/. The public members are the
