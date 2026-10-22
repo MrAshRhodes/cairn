@@ -11,7 +11,8 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @interface CCChromiumRuntime : NSObject
-+ (BOOL)prepareApplication;
+// Test harnesses only: `mockKeychain` swaps Chromium's Keychain-backed cookie-encryption key for a fixed mock key.
++ (BOOL)prepareApplicationWithMockKeychain:(BOOL)mockKeychain;
 + (BOOL)startWithRoot:(NSString *)root error:(NSError *_Nullable *_Nullable)error;
 + (NSString *)versionDescription;
 + (void)shutdown;

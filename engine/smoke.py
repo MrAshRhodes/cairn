@@ -46,7 +46,9 @@ def main():
     env = dict(os.environ)
     for product in ["CairnHelper", "CairnChromiumSmoke"]:
         subprocess.run([str(ROOT / "scripts/swiftw"), "build", "--product", product], cwd=ROOT, env=env, check=True)
-    work = ROOT / "engine/.cache" / ("smoke-" + str(uuid.uuid4()))
+    # CEF resolves root_cache_path but not per-profile cache paths; a symlinked engine/.cache
+    # (shared between worktrees) would otherwise silently demote every profile to in-memory storage.
+    work = (ROOT / "engine/.cache").resolve() / ("smoke-" + str(uuid.uuid4()))
     app = work / "Cairn.app"
     (app / "Contents/MacOS").mkdir(parents=True)
     shutil.copy2(ROOT / ".build/debug/CairnChromiumSmoke", app / "Contents/MacOS/Cairn")

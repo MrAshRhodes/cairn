@@ -184,7 +184,7 @@ enum SmokeError: Error { case failed(String) }
 
 MainActor.assumeIsolated {
     setbuf(stdout, nil)
-    guard ChromiumEngineModule.prepareApplication(),
+    guard ChromiumEngineModule.prepareApplication(mockKeychain: true),
           let root = ProcessInfo.processInfo.environment["CAIRN_SMOKE_DATA_ROOT"],
           let base = ProcessInfo.processInfo.environment["CAIRN_SMOKE_URL"].flatMap(URL.init(string:)) else {
         fatalError("Run with python3 engine/smoke.py")

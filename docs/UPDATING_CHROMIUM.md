@@ -126,7 +126,10 @@ MainActor.assumeIsolated {
 ```
 
 `prepareApplication()` supplies CEF's required `NSApplication` subclass and
-`CefAppProtocol` send-event guard. The external message pump schedules CEF work on
+`CefAppProtocol` send-event guard. Its `mockKeychain` parameter defaults to `false` and
+exists only for unattended test harnesses such as the smoke binary: Chromium then uses a
+fixed mock key instead of the user's `Chromium Safe Storage` Keychain item. Shipping apps
+must not enable it. The external message pump schedules CEF work on
 the AppKit main thread, with reentrancy protection and a 30 Hz bounded idle
 fallback in common run-loop modes. Each tab exposes a stable `NSView` container; CEF creates a
 **windowed Alloy-style child NSView** when that container is attached to a window.
@@ -295,6 +298,17 @@ and the captured compositor image dimensions.
 It fails if the process exits without the success marker. Retain its diagnostic
 logs on failure. It does not replace certificate/permission/manual UI tests,
 Developer ID/notarization verification, or testing on Intel hardware.
+
+The smoke binary runs Chromium with a mock Keychain so results do not depend on the
+developer's login Keychain. Without it, an ad-hoc binary that did not create the existing
+`Chromium Safe Storage` item is asked for Keychain authorization; in an unattended run the
+first navigation then never commits (`Timed out waiting for navigation`) and teardown ends
+with `Teardown watchdog expired`. Profiles are created under the symlink-resolved
+`engine/.cache`: CEF rejects request-context cache paths outside its resolved
+`root_cache_path` and silently falls back to in-memory storage (look for
+`cache_path is invalid` in the profile root's `cef.log`). Rarely (1 of about 25 recorded
+arm64 runs) Chromium's teardown watchdog still terminates the process with exit status 2
+after `CAIRN_CEF_SMOKE_OK` was printed; that run is reported as failed, so rerun it.
 
 Recorded validation on 2026-10-21, macOS 26.6 arm64 / CLT Swift 6.4:
 

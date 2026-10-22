@@ -23,6 +23,7 @@ bool running = false;
 bool ready = false;
 bool stopping = false;
 bool terminated = false;
+bool useMockKeychain = false;
 typedef void (^ShutdownCompletion)(void);
 NSMutableArray<ShutdownCompletion> *shutdownCompletions;
 int pendingBrowsers = 0;
@@ -54,6 +55,12 @@ void Pump() {
 class Application final : public CefApp, public CefBrowserProcessHandler {
  public:
   CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler() override { return this; }
+  void OnBeforeCommandLineProcessing(const CefString& process_type,
+                                     CefRefPtr<CefCommandLine> command_line) override {
+    // Without this, an unattended run blocks forever on a Keychain authorization prompt
+    // for the "Chromium Safe Storage" item and no page ever commits.
+    if (useMockKeychain && process_type.empty()) command_line->AppendSwitch("use-mock-keychain");
+  }
   void OnContextInitialized() override { ready = true; }
   void OnScheduleMessagePumpWork(int64_t delay) override {
     // CEF can call this on any thread. Chromium work stays on AppKit's main thread.
@@ -302,8 +309,9 @@ class CookiesDone final : public CefDeleteCookiesCallback {
 @end
 
 @implementation CCChromiumRuntime
-+ (BOOL)prepareApplication {
++ (BOOL)prepareApplicationWithMockKeychain:(BOOL)mockKeychain {
   if (NSApp && ![NSApp isKindOfClass:CCApplication.class]) return NO;
+  useMockKeychain = mockKeychain;
   [CCApplication sharedApplication];
   return YES;
 }

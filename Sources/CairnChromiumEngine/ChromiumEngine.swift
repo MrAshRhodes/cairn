@@ -5,8 +5,10 @@ import CairnChromiumBridge
 
 public enum ChromiumEngineModule {
     /// Must run before anything touches NSApplication.shared (AppKit, Sparkle) so CEF's application subclass is the one instantiated.
-    @MainActor @discardableResult public static func prepareApplication() -> Bool {
-        CCChromiumRuntime.prepareApplication()
+    /// `mockKeychain` is for unattended test harnesses only: Chromium then encrypts cookies with a fixed mock key instead of the
+    /// user's Keychain, so a Keychain authorization dialog cannot block loading. Shipping builds must keep it `false`.
+    @MainActor @discardableResult public static func prepareApplication(mockKeychain: Bool = false) -> Bool {
+        CCChromiumRuntime.prepareApplication(withMockKeychain: mockKeychain)
     }
 
     @MainActor public static func register(in registry: EngineRegistry) {
