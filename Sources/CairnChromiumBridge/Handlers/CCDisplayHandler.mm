@@ -17,6 +17,9 @@ class DisplayHandler final : public TabHandler, public CefDisplayHandler {
     if (!frame->IsMain()) return;
     auto tab = owner; tab.state[@"url"] = String(url); tab.state[@"isSecure"] = @NO; [tab publish];
   }
+  void OnFullscreenModeChange(CefRefPtr<CefBrowser>, bool fullscreen) override {
+    [owner pageFullscreenChanged:fullscreen];
+  }
  private:
   IMPLEMENT_REFCOUNTING(DisplayHandler);
 };
