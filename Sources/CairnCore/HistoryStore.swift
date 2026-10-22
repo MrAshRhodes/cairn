@@ -88,6 +88,51 @@ public final class HistoryStore {
         }
     }
 
+    /// The entries whose (url, time) pair is not already stored, so that re-importing is idempotent.
+    public func missing(_ candidates: [HistoryEntry]) throws -> [HistoryEntry] {
+        guard !candidates.isEmpty else { return [] }
+        return try newEntries(candidates, existing: allEntries())
+    }
+
+    /// Stores many entries in a single transaction (all or nothing). Invalid entries (non-web URLs, oversized fields),
+    /// ones already stored, and ones too old to fit under the capacity are skipped. Returns the stored count.
+    @discardableResult
+    public func recordBatch(_ batch: [HistoryEntry]) throws -> Int {
+        let valid = batch.filter {
+            URLResolver.isWebURL($0.url) && $0.url.absoluteString.utf8.count <= 65_536 && $0.title.utf8.count <= 65_536
+                && !$0.title.contains("\0") && $0.visitedAt.timeIntervalSince1970.isFinite
+        }
+        let existing = try allEntries()
+        var fresh = newEntries(valid, existing: existing)
+        let combined = (existing + fresh).map(\.visitedAt).sorted(by: >)
+        if combined.count > maximumEntries {
+            let cutoff = combined[maximumEntries - 1]
+            fresh = fresh.filter { $0.visitedAt >= cutoff }
+        }
+        guard !fresh.isEmpty else { return 0 }
+        try transaction {
+            for entry in fresh {
+                try execute("INSERT INTO history (id, url, title, visited_at) VALUES (?, ?, ?, ?)",
+                            bindings: [.text(UUID().uuidString), .text(entry.url.absoluteString), .text(entry.title),
+                                       .number(entry.visitedAt.timeIntervalSince1970)])
+            }
+            try execute("DELETE FROM history WHERE rowid IN (SELECT rowid FROM history ORDER BY visited_at DESC, rowid DESC LIMIT -1 OFFSET ?)",
+                        bindings: [.integer(maximumEntries)])
+        }
+        return min(fresh.count, maximumEntries)
+    }
+
+    private func allEntries() throws -> [HistoryEntry] {
+        try entries("SELECT id, url, title, visited_at FROM history", bindings: [])
+    }
+
+    private func newEntries(_ candidates: [HistoryEntry], existing: [HistoryEntry]) -> [HistoryEntry] {
+        var known = Set(existing.map { Self.identity($0.url, $0.visitedAt) })
+        return candidates.filter { known.insert(Self.identity($0.url, $0.visitedAt)).inserted }
+    }
+
+    private static func identity(_ url: URL, _ date: Date) -> String { "\(url.absoluteString)\u{1E}\(date.timeIntervalSince1970)" }
+
     public func search(_ query: String, limit: Int = 20) throws -> [HistoryEntry] {
         guard limit > 0 else { return [] }
         guard !query.contains("\0") else { throw ServiceError.invalidData("Invalid history query.") }

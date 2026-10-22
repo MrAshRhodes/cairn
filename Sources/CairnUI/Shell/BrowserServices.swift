@@ -13,7 +13,7 @@ public struct BrowserIssue: Identifiable {
 }
 
 public enum BrowserSheet: String, Identifiable {
-    case preferences, downloads, boosts, archive, history, moduleTrust
+    case preferences, downloads, boosts, archive, history, moduleTrust, importer
     public var id: String { rawValue }
 }
 
@@ -138,6 +138,7 @@ public final class BrowserServices {
         do { try modules.loadUserModules(from: directory.appendingPathComponent("Modules", isDirectory: true)) }
         catch { report("Some modules could not be loaded", error: error) }
         modules.activate(model: model)
+        sweepImportStaging()
         model.onChange = { [weak self] in
             guard let self, self.workspaceWritable else { return }
             self.workspaceStore.scheduleSave(self.model.workspace)
@@ -308,6 +309,7 @@ public final class BrowserServices {
             .init(id: "ui.downloads", title: "Downloads", symbol: "arrow.down.circle", perform: { [weak self] _ in self?.sheet = .downloads }),
             .init(id: "ui.archive", title: "Archived Tabs", symbol: "archivebox", perform: { [weak self] _ in self?.sheet = .archive }),
             .init(id: "ui.history", title: "History", symbol: "clock", perform: { [weak self] _ in self?.sheet = .history }),
+            .init(id: "ui.import", title: "Import from Another Browser…", symbol: "square.and.arrow.down", perform: { [weak self] _ in self?.presentImporter() }),
             .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", shortcut: "⌘F", perform: { [weak self] _ in self?.findPresented = true }),
         ]
         let localTitles = Set(local.map { $0.title.lowercased() })

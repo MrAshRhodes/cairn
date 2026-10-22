@@ -104,6 +104,7 @@ struct BrowserView: View {
             case .boosts: BoostsView(services: services)
             case .archive: ArchiveView(model: model)
             case .history: HistoryView(services: services)
+            case .importer: ImportWizardView(services: services)
             case .moduleTrust:
                 if let review = services.moduleReview {
                     ScriptTrustReview(title: review.title, source: review.source,
@@ -199,6 +200,7 @@ struct BrowserView: View {
                     }
                 }
                 Divider()
+                Button("Import…") { services.presentImporter() }
                 Button("Boosts…") { services.sheet = .boosts }
                 Button("Settings…") { services.sheet = .preferences }
             } label: { Image(systemName: "ellipsis").frame(width: 28, height: 32) }

@@ -40,13 +40,14 @@ let package = Package(
         .target(name: "CairnCore", dependencies: ["CairnEngineKit"]),
         .target(name: "CairnModules", dependencies: ["CairnCore", "CairnEngineKit"]),
         .target(name: "CairnBoosts", dependencies: ["CairnCore", "CairnEngineKit"]),
+        .target(name: "CairnImport", dependencies: ["CairnCore"]),
         .target(name: "CairnChromiumBridge", publicHeadersPath: "include",
                 cxxSettings: cppSettings + [.unsafeFlags(["-fobjc-arc"])],
                 linkerSettings: cefLinkSettings),
         .target(name: "CairnChromiumEngine", dependencies: ["CairnChromiumBridge", "CairnEngineKit"]),
         .target(name: "CairnUpdater", dependencies: [.product(name: "Sparkle", package: "Sparkle")]),
         .target(name: "CairnUI", dependencies: [
-            "CairnCore", "CairnEngineKit", "CairnModules", "CairnBoosts", "CairnUpdater",
+            "CairnCore", "CairnEngineKit", "CairnModules", "CairnBoosts", "CairnUpdater", "CairnImport",
         ]),
         .executableTarget(name: "Cairn", dependencies: [
             "CairnUI", "CairnCore", "CairnEngineKit", "CairnModules", "CairnBoosts", "CairnChromiumEngine", "CairnUpdater",
@@ -57,6 +58,7 @@ let package = Package(
                           path: "engine/smoke"),
         .testTarget(name: "CairnCoreTests", dependencies: ["CairnCore", "CairnEngineKit"]),
         .testTarget(name: "CairnModulesTests", dependencies: ["CairnModules", "CairnBoosts", "CairnCore", "CairnEngineKit"]),
+        .testTarget(name: "CairnImportTests", dependencies: ["CairnImport", "CairnCore"]),
         .testTarget(name: "CairnUITests", dependencies: ["CairnUI", "CairnCore", "CairnEngineKit"]),
     ],
     swiftLanguageModes: [.v5],
