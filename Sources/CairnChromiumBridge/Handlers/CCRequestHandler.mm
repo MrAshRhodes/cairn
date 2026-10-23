@@ -4,6 +4,7 @@
 // CEF may call GetResourceRequestHandler off the main thread, so this handler keeps the resource
 // handler itself and never touches its Client.
 #import "../CCInternal.h"
+#import "CCExternalNavigation.h"
 #import "CCPending.h"
 #include <atomic>
 #include "include/cef_task.h"
@@ -28,10 +29,18 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
       const CefString&, bool&) override {
     return resource_;
   }
-  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest>,
+  bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request,
                       bool, bool) override {
     auto tab = owner;
     if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser)) return true;
+    NSString *url = String(request->GetURL());
+    if (frame && frame->IsMain() && IsExternalNavigationURL(url)) {
+      // Cancel before Chromium replaces the document with an unknown-scheme error.
+      // The app still owns allow-listing, handler availability and user consent.
+      if ([tab.delegate conformsToProtocol:@protocol(CCChromiumTabContextMenuDelegate)])
+        [(id<CCChromiumTabContextMenuDelegate>)tab.delegate chromiumTab:tab openExternalURL:url];
+      return true;
+    }
     if (frame && frame->IsMain()) {
       ++navigationGeneration_;
       CancelPending(tab);

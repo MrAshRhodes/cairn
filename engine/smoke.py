@@ -119,6 +119,9 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             pass
 
     def do_GET(self):
+        if self.path == "/network-failure":
+            self.close_connection = True
+            return
         if self.path.startswith("/dl/"):
             try:
                 self.do_download("GET")

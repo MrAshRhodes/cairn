@@ -42,19 +42,24 @@ documented post-success teardown flake, so the restricted retry exception does n
 apply. Do not commit that lock or call the build validated until the smoke passes and
 the evidence below is recorded for those exact bytes.
 
-**The 154 smoke is intermittent.** Of two local runs on 2026-10-23, one passed
-completely and one failed the external-protocol check (“external protocol is reported to
-the app, never launched by Chromium”) because the tab's `ERR_UNKNOWN_URL_SCHEME` load
-error was already published when the check ran. In the passing run the same error
-appeared just after the check, so the assertion races a probable user-visible defect
-([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Repeat the smoke before reading
-either result as acceptance or as a regression.
+**The external-protocol race has a local fix.** Earlier 154 runs could pass before
+Chromium published `ERR_UNKNOWN_URL_SCHEME`
+([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Main-frame external navigations
+are now cancelled in `OnBeforeBrowse`, before replacing the current document or
+invalidating its pending requests; the app still decides whether to launch an
+allow-listed handler after consent. Browser-owned schemes retain normal error handling.
+The strengthened smoke waits across a renderer timer and verifies exactly one callback,
+unchanged URL/document and no delayed error for both mailto and a declined custom scheme.
+A separate failed HTTP request verifies that genuine network errors remain visible.
+Both native regression tests and the full bundled 154 arm64 smoke passed locally on
+2026-10-23 (first attempt, shutdown 506 ms). This evidence is not final release acceptance;
+repeat the strengthened smoke on both architectures for the reviewed shipping commit.
 
 [CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
 subsequently passed on native arm64 and x86_64 runners at commit `8a76627`, with the
 committed 154 pin: Swift/engine/release checks, first-attempt bundled smoke and
 ad-hoc app/DMG packaging all passed. Binary uploads were skipped. This adds native
-Intel runtime evidence but does not fix the intermittent defect above or close full
+Intel runtime evidence but predates the external-protocol fix above and does not close full
 interactive/signed-runtime acceptance. See the
 [recorded CI evidence](RELEASING.md#building-and-testing-the-intel-app).
 Repeat validation for the exact engine bytes to ship; this result does not cover 156.

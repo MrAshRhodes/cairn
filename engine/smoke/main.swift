@@ -182,10 +182,7 @@ enum SmokeError: Error { case failed(String) }
             _ = try await js(first, "window.open('/popup'); true")
             try await Task.sleep(nanoseconds: 200_000_000)
             try require(popups == 0, "unsolicited popup is blocked")
-            _ = try await js(first, "location.href = 'mailto:smoke@example.com'; true")
-            try await wait { !self.externalURLs.isEmpty }
-            try require(externalURLs.first?.absoluteString == "mailto:smoke@example.com" && first.state.errorMessage == nil,
-                        "external protocol is reported to the app, never launched by Chromium")
+            try await checkExternalProtocols(first)
             try await runMedia()
             try await checkPopups()
             try await checkPrompts()
