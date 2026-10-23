@@ -96,6 +96,20 @@ transient and close scenarios were not reached. No timeout or assertion was rela
 Both jobs skipped app/DMG packaging and binary uploads; the two retained workflow
 artifacts contain smoke logs, not distributable builds.
 
+**The timer probe commit passed Intel's external-protocol phase three times, but remains
+unqualified.** [Run 39955351675](https://github.com/MrAshRhodes/cairn/actions/runs/39955351675)
+tested `f933655` (diagnostic probe, unchanged assertions and 15-second deadline). The first
+Intel attempt and two reruns each passed both external-protocol cases and then
+reached and passed the later media, download, transient (`CAIRN_TRANSIENT_NAVIGATION_OK`) and
+close (`CAIRN_CLOSE_LIFECYCLE_OK`) scenarios; no `CAIRN_SMOKE_EXTERNAL_PROBE` was emitted because
+the timer settled within two seconds. Arm64 and Intel both still failed only the same five
+strict #24 first-document Boost assertions, so the run is not a passing candidate. Intel had failed this
+phase at `0b6bbb4`, `aa76bd0` and `e0aa63f`. Three passes do not explain those failures: the
+timer expression now assigns synthetic booleans before and after the unchanged 500 ms timer, and a
+second main-actor task sleeps for two seconds, so a smoke-side confound or runner variance is
+not excluded. Keep #31 open until the cause is identified or repeated native Intel runs justify
+a documented, evidence-backed qualification.
+
 Earlier [CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
 passed on native arm64 and x86_64 runners at commit `8a76627`, with the
 committed 154 pin: Swift/engine/release checks, first-attempt bundled smoke and
