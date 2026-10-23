@@ -161,6 +161,94 @@ struct BrowserServicesTests {
         #expect(model.selectedTabID != first)
     }
 
+    @Test(arguments: [false, true])
+    func mostRecentSpaceConsidersOrdinaryAndPinnedTabs(pinned: Bool) {
+        let tabs = [10.0, 30.0, 20.0].map { TabItem(lastActiveAt: Date(timeIntervalSince1970: $0)) }
+        let recent = Space(name: "Recent", pinned: pinned ? tabs : [], tabs: pinned ? [] : tabs)
+        let olderTab = TabItem(lastActiveAt: Date(timeIntervalSince1970: 25))
+        let older = Space(name: "Older", pinned: pinned ? [] : [olderTab], tabs: pinned ? [olderTab] : [])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [Space(name: "Empty first"), older, recent, Space(name: "Empty last")],
+            selectedSpaceID: older.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == recent.id)
+        #expect(model.selectedSpace.id == older.id)
+    }
+
+    @Test func mostRecentSpaceIgnoresArchivedTabs() {
+        let active = Space(name: "Active", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let archived = Space(name: "Archived", archive: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 30))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [archived, active], selectedSpaceID: archived.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == active.id)
+    }
+
+    @Test func mostRecentSpaceKeepsFirstSpaceWhenActivityTies() {
+        let date = Date(timeIntervalSince1970: 20)
+        let first = Space(name: "First", tabs: [TabItem(lastActiveAt: date)])
+        let second = Space(name: "Second", pinned: [TabItem(lastActiveAt: date)])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [first, second], selectedSpaceID: second.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == first.id)
+    }
+
+    @Test func mostRecentSpaceKeepsFirstSpaceWhenAllSpacesAreEmpty() {
+        let first = Space(name: "First")
+        let second = Space(name: "Second")
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [first, second], selectedSpaceID: second.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == first.id)
+    }
+
+    @Test(arguments: [LinkDestination.mostRecent, .quickWindow, .space(UUID())])
+    func externalLinksUseMostRecentSpaceForFallbackDestinations(destination: LinkDestination) throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let older = Space(name: "Older", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 10))])
+        let recent = Space(name: "Recent", pinned: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [older, recent], selectedSpaceID: older.id))
+        let services = BrowserServices(model: model, directory: directory)
+        try services.linkRules.update(rules: [], defaultDestination: destination, peekEnabled: true)
+        let url = try #require(URL(string: "https://example.com/external"))
+
+        services.openExternalLink(url)
+
+        #expect(model.selectedSpace.id == recent.id)
+        #expect(model.selectedTab?.url == url)
+        #expect(model.workspace.spaces[0].tabs.count == 1)
+        #expect(model.workspace.spaces[1].tabs.count == 1)
+    }
+
+    @Test func externalLinksHonorExplicitSpaceInsteadOfMostRecent() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = Space(name: "Destination")
+        let recent = Space(name: "Recent", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [destination, recent], selectedSpaceID: recent.id))
+        let services = BrowserServices(model: model, directory: directory)
+        let rule = LinkRule(text: "example.com", destination: .space(destination.id))
+        try services.linkRules.update(rules: [rule], defaultDestination: .mostRecent, peekEnabled: true)
+        let url = try #require(URL(string: "https://example.com/external"))
+
+        services.openExternalLink(url)
+
+        #expect(model.selectedSpace.id == destination.id)
+        #expect(model.selectedTab?.url == url)
+        #expect(model.workspace.spaces[0].tabs.count == 1)
+        #expect(model.workspace.spaces[1].tabs.count == 1)
+    }
+
     @Test func splitUsesAnotherTabOrCreatesOneAndTogglesOff() {
         let model = BrowserModel(engine: TestEngine())
         let services = BrowserServices(model: model)

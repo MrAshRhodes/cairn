@@ -12,7 +12,9 @@ extension BrowserServices {
     /// The Space whose tabs were used most recently; falls back to the selected Space.
     var mostRecentSpaceID: UUID {
         let latest = model.workspace.spaces.max { lhs, rhs in
-            (lhs.tabs + lhs.pinned).map(\.lastActiveAt).max() ?? .distantPast < (rhs.tabs + rhs.pinned).map(\.lastActiveAt).max() ?? .distantPast
+            let lhsLastActiveAt: Date = (lhs.tabs + lhs.pinned).map(\.lastActiveAt).max() ?? .distantPast
+            let rhsLastActiveAt: Date = (rhs.tabs + rhs.pinned).map(\.lastActiveAt).max() ?? .distantPast
+            return lhsLastActiveAt < rhsLastActiveAt
         }
         return latest?.id ?? model.selectedSpace.id
     }
