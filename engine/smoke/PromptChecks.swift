@@ -22,7 +22,15 @@ extension Smoke: EngineTabPromptEvents {
     func engineTab(_ tab: EngineTab, requestsPermission request: EnginePermissionRequest) {
         let harness = PromptHarness.shared
         harness.permissions.append(request)
-        (tab as? EngineTabPromptResponding)?.resolvePermission(id: request.id, allow: harness.permission(request))
+        let allow = harness.permission(request)
+        let kinds = request.kinds.map(\.rawValue).sorted().joined(separator: ",")
+        print("PROMPT_PROBE permission received kinds=\(kinds) allow=\(allow)")
+        if let responder = tab as? EngineTabPromptResponding {
+            responder.resolvePermission(id: request.id, allow: allow)
+            print("PROMPT_PROBE permission callback returned kinds=\(kinds)")
+        } else {
+            print("PROMPT_PROBE permission responder missing kinds=\(kinds)")
+        }
     }
     func engineTab(_ tab: EngineTab, requestsJSDialog request: EngineJSDialogRequest) {
         let harness = PromptHarness.shared
@@ -62,9 +70,12 @@ extension Smoke {
             """) as? String
         try require(denied == "error:1", "geolocation request reaches the client and a denial is delivered to the page")
         try require(harness.permissions.last?.kinds == [.geolocation], "geolocation request names its kind")
+        let permissionsBeforeMedia = harness.permissions.count
+        print("PROMPT_PROBE microphone evaluation begin")
         let media = try await js(tab, """
             navigator.mediaDevices.getUserMedia({audio: true}).then(() => 'granted', e => e.name)
             """) as? String
+        print("PROMPT_PROBE microphone evaluation returned permissionRequests=\(harness.permissions.count - permissionsBeforeMedia)")
         try require(media == "NotAllowedError", "microphone request is denied through the media callback")
         try require(harness.permissions.last?.kinds == [.microphone], "microphone request names its kind")
         harness.permission = { $0.kinds == [.notifications] }

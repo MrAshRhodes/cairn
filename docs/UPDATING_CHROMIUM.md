@@ -737,6 +737,19 @@ It fails if the process exits without the success marker. Retain its diagnostic
 logs on failure. It does not replace certificate/permission/manual UI tests,
 Developer ID/notarization verification, or testing on Intel hardware.
 
+The smoke launcher also enables `CAIRN_SMOKE_DEVTOOLS` diagnostics on stderr.
+Correlate records by browser ID and suggested/assigned request ID: `send` and
+`submitted` surround command submission, `observer-before-gcd` precedes delivery
+to the main queue, and `received` precedes the pending-callback lookup. A
+`timeout` retains the existing 15-second deadline; an ID mismatch is evidence to
+investigate, not an assumed cause. Records use monotonic uptime and omit request
+and response payloads, JavaScript, and URLs. `CAIRN_SMOKE_EXTERNAL` labels the
+marker, assignment, handoff wait, and timer phases by synthetic case index.
+`PROMPT_PROBE` distinguishes permission delivery, return from the host's
+permission-response call, and completion of the microphone JavaScript evaluation;
+return from the host call alone does not prove that the page's promise settled.
+These diagnostics do not relax assertions or establish runtime acceptance.
+
 The smoke binary runs Chromium with a mock Keychain so results do not depend on the
 developer's login Keychain. Without it, an ad-hoc binary that did not create the existing
 `Chromium Safe Storage` item is asked for Keychain authorization; in an unattended run the

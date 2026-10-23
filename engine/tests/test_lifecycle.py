@@ -2,6 +2,7 @@
 import os
 import pathlib
 import platform
+import re
 import shutil
 import subprocess
 import unittest
@@ -85,6 +86,59 @@ class LifecycleContractTests(unittest.TestCase):
         self.assertNotIn("setScripts:", enable)
         scripts = tab.split("- (void)setScripts:", 1)[1].split("- (void)snapshot:", 1)[0]
         self.assertNotIn("self.pageEnabled", scripts.split("NSUInteger generation", 1)[0])
+
+    def test_devtools_diagnostics_are_smoke_gated_and_payload_free(self):
+        diagnostics = (BRIDGE / "CCDevToolsDiagnostics.h").read_text()
+        self.assertIn('std::getenv("CAIRN_SMOKE_URL")', diagnostics)
+        self.assertLess(diagnostics.index("if (!smoke || !*smoke) return;"),
+                        diagnostics.index("std::fprintf(stderr"))
+        self.assertIn("NSProcessInfo.processInfo.systemUptime", diagnostics)
+        for field in ("t=%.6f", "stage=%s", "browser=%d", "suggested=%d", "assigned=%d",
+                      "method=%s", "success=%d", "pending=%d"):
+            with self.subTest(field=field):
+                self.assertIn(field, diagnostics)
+        emission = diagnostics.split("std::fprintf(", 1)[1].split("std::fflush", 1)[0]
+        self.assertNotRegex(emission, r"\b(smoke|params|source|data|result|error|url)\b")
+        for path in ("CCTab.mm", "Handlers/CCDevToolsObserver.mm"):
+            source = (BRIDGE / path).read_text()
+            traces = re.findall(r"TraceDevTools\(.*?\);", source, flags=re.DOTALL)
+            self.assertTrue(traces)
+            for trace in traces:
+                with self.subTest(path=path, trace=trace):
+                    self.assertNotRegex(trace, r"\b(params|source|data|result|reason|url)\b")
+
+    def test_devtools_tracing_preserves_request_ids_and_the_fifteen_second_timeout(self):
+        source = (BRIDGE / "CCTab.mm").read_text()
+        call = source.split("- (void)call:", 1)[1].split("- (void)received:", 1)[0]
+        self.assertLess(call.index("self.replies[@(identifier)] = reply;"),
+                        call.index('TraceDevTools("send"'))
+        self.assertLess(call.index('TraceDevTools("send"'), call.index("ExecuteDevToolsMethod("))
+        self.assertLess(call.index("ExecuteDevToolsMethod("), call.index('TraceDevTools("submitted"'))
+        self.assertIn('TraceDevTools("submitted", browserID, identifier, accepted, method)', call)
+        self.assertIn("dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC)", call)
+        self.assertIn("DevToolsReply pending = tab.replies[@(identifier)];", call)
+        self.assertNotIn("replies[@(accepted)]", call)
+        timeout = call.split("if (pending) {", 1)[1]
+        self.assertLess(timeout.index('TraceDevTools("timeout"'),
+                        timeout.index("[tab.replies removeObjectForKey:@(identifier)]"))
+        self.assertIn("Chromium operation timed out (method=%@, request=%d, assigned=%d, browser=%d)", timeout)
+        self.assertIn("CEF rejected the operation (method=%@, request=%d, browser=%d)", call)
+        received = source.split("- (void)received:", 1)[1].split("- (void)cancelReplies:", 1)[0]
+        self.assertLess(received.index('TraceDevTools("received"'), received.index("if (!reply) return;"))
+        self.assertIn("identifier, nil, success, reply != nil", received)
+        evaluate = source.split("- (void)evaluate:", 1)[1].split("- (void)setScripts:", 1)[0]
+        self.assertIn('@"returnByValue": @YES, @"awaitPromise": @YES', evaluate)
+
+    def test_devtools_observer_traces_before_async_delivery_and_keeps_its_payload_copy(self):
+        source = (BRIDGE / "Handlers/CCDevToolsObserver.mm").read_text()
+        result = source.split("void OnDevToolsMethodResult(", 1)[1].split("void OnDevToolsAgentAttached(", 1)[0]
+        self.assertLess(result.index('TraceDevTools("observer-before-gcd"'), result.index("dispatch_async("))
+        self.assertIn("[NSData dataWithBytes:data length:size]", result)
+        self.assertIn("[tab received:id success:success data:copy]", result)
+        self.assertIn('TraceDevTools("attached", browser ? browser->GetIdentifier() : 0', source)
+        detached = source.split("void OnDevToolsAgentDetached(", 1)[1]
+        self.assertLess(detached.index('TraceDevTools("detached-before-gcd"'), detached.index("dispatch_async("))
+        self.assertIn('[tab cancelReplies:@"Page debugging agent detached"]', detached)
 
     def test_close_cannot_start_teardown_before_page_approval(self):
         close = (BRIDGE / "CCTab+Closing.mm").read_text()

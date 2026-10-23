@@ -1,6 +1,7 @@
 // CCTab.mm — CCChromiumTab: the browser view, navigation, DevTools calls with replies and timeouts,
 // user scripts, find-in-page and snapshots. Feature-specific tab commands belong in CCTab+<Feature>.mm.
 #import "CCInternal.h"
+#import "CCDevToolsDiagnostics.h"
 #import "Handlers/CCPending.h"
 #include <algorithm>
 #include <cmath>
@@ -275,23 +276,34 @@ NSTimeInterval NavigationWatchdogSeconds() {
   NSData *json = [NSJSONSerialization dataWithJSONObject:params options:0 error:nil];
   auto value = CefParseJSON(json.bytes, json.length, JSON_PARSER_RFC);
   int identifier = ++_nextMessage;
+  const int browserID = _client->browser->GetIdentifier();
   self.replies[@(identifier)] = reply;
+  TraceDevTools("send", browserID, identifier, -1, method);
   int accepted = _client->browser->GetHost()->ExecuteDevToolsMethod(identifier, method.UTF8String, value->GetDictionary());
+  TraceDevTools("submitted", browserID, identifier, accepted, method);
   if (!accepted) {
-    [self.replies removeObjectForKey:@(identifier)]; reply(nil, Failure(@"CEF rejected the operation")); return;
+    [self.replies removeObjectForKey:@(identifier)];
+    reply(nil, Failure([NSString stringWithFormat:@"CEF rejected the operation (method=%@, request=%d, browser=%d)",
+                       method, identifier, browserID]));
+    return;
   }
   __weak CCChromiumTab *weakSelf = self;
   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
     auto tab = weakSelf;
     DevToolsReply pending = tab.replies[@(identifier)];
     if (pending) {
+      TraceDevTools("timeout", browserID, identifier, accepted, method, -1, 1);
       [tab.replies removeObjectForKey:@(identifier)];
-      pending(nil, Failure(@"Chromium operation timed out"));
+      pending(nil, Failure([NSString stringWithFormat:
+          @"Chromium operation timed out (method=%@, request=%d, assigned=%d, browser=%d)",
+          method, identifier, accepted, browserID]));
     }
   });
 }
 - (void)received:(int)identifier success:(BOOL)success data:(NSData *)data {
   DevToolsReply reply = self.replies[@(identifier)];
+  auto browser = self.cefBrowser;
+  TraceDevTools("received", browser ? browser->GetIdentifier() : 0, -1, identifier, nil, success, reply != nil);
   if (!reply) return;
   [self.replies removeObjectForKey:@(identifier)];
   NSDictionary *result = data.length ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : @{};
