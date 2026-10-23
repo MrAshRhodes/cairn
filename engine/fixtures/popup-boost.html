@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+window.firstStart = window.__popupStart === true;
+window.firstEnd = typeof window.__popupEnd !== "undefined";
+window.requestMethod = __METHOD__;
+window.postBody = __POST_BODY__;
+window.messages = [];
+addEventListener("message", event => messages.push({
+  data: event.data, fromPopup: event.source === window.win, origin: event.origin
+}));
+document.cookie = "popupBoost=shared; Path=/";
+document.addEventListener("DOMContentLoaded", () => {
+  if (location.pathname.endsWith("/opener")) return;
+  document.title = "Boost child";
+  if (window.opener) window.opener.postMessage({
+    firstStart, firstEnd, count: window.__popupEnd, body: !!document.body,
+    cookie: document.cookie, name: window.name
+  }, "*");
+});
+</script>
+<title>Boost opener</title>
+<body>
+<button id="direct" onclick="window.win = window.open('/popup-boost/landing?direct', 'boostDirect')">Direct</button>
+<button id="redirect" onclick="window.win = window.open('/popup-boost/redirect', 'boostRedirect')">Redirect</button>
+<button id="cross" onclick="window.win = window.open('/popup-boost/cross-redirect', 'boostCross')">Cross host</button>
+<button id="blank" onclick="window.win = window.open('', 'boostBlank'); win.document.write('<title>Written blank</title><body>written by opener</body>'); win.document.close()">Blank</button>
+<button id="named" onclick="window.win = window.open('/popup-boost/landing?named', 'boostDirect')">Named target</button>
+<form method="post" target="boostPost" action="/popup-boost/landing?post">
+  <input type="hidden" name="payload" value="cairn"><button id="post">Post</button>
+</form>
+</body>

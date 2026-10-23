@@ -87,6 +87,8 @@ if [[ ${#notary_args[@]} -gt 0 ]]; then
   xcrun stapler validate dist/Cairn.app
   spctl --assess --type execute --verbose dist/Cairn.app
   notarized=true
+  # Stop before the disk image is built and notarized if the stapled app no longer satisfies the packaging contract.
+  scripts/verify-bundle.sh --arch "$ARCH" --require-developer-id --notarized dist/Cairn.app
 fi
 # Archive after stapling: the exact uploaded bytes are the exact EdDSA-signed bytes.
 ditto -c -k --sequesterRsrc --keepParent dist/Cairn.app "$archive"
@@ -97,6 +99,16 @@ if [[ "$notarized" == true ]]; then
   xcrun stapler staple "$dmg"
   xcrun stapler validate "$dmg"
 fi
+# Verify what users receive, not only the build directory: the update archive is extracted and the disk image mounted,
+# and the app inside must satisfy the whole packaging contract (stapled and Gatekeeper-accepted after notarization).
+verify_args=(--arch "$ARCH")
+if [[ "$notarized" == true ]]; then
+  verify_args+=(--require-developer-id --notarized)
+elif [[ "$SIGNING_IDENTITY" != "-" ]]; then
+  verify_args+=(--require-developer-id)
+fi
+scripts/verify-bundle.sh "${verify_args[@]}" "$archive"
+scripts/verify-bundle.sh "${verify_args[@]}" "$dmg"
 python3 Resources/ReleaseTools/ReleaseAssets.py record --app dist/Cairn.app --zip "$archive" --dmg "$dmg" \
   --notarized "$notarized" --output "$record"
 echo "Release assets for $ARCH prepared in $assets; nothing has been signed for Sparkle or published."

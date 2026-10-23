@@ -45,10 +45,12 @@ def check_engine(arch):
     """Fail fast, before any compilation, unless the pinned CEF is prepared for exactly this arch."""
     check_architecture(arch)
     pin = ((read_json(ROOT / "engine/cef.lock.json") or {}).get("artifacts") or {}).get(arch)
+    # The markers record name, sha1 and size; a SHA-256 added to the lock later must not invalidate a prepared tree.
+    identity = {key: pin.get(key) for key in ("name", "sha1", "size")} if pin else None
     cef = ROOT / "engine/cef" / arch
     build = ROOT / "engine/.cache" / f"build-{arch}"
-    prepared = (pin is not None and read_json(cef / ".cairn-pin.json") == pin
-                and read_json(build / ".cairn-pin.json") == pin
+    prepared = (identity is not None and read_json(cef / ".cairn-pin.json") == identity
+                and read_json(build / ".cairn-pin.json") == identity
                 and (cef / "Release" / FRAMEWORK / "Chromium Embedded Framework").is_file()
                 and (build / "libcef_dll_wrapper/libcef_dll_wrapper.a").is_file())
     require(prepared, f"Chromium (CEF) is not prepared for {arch} or does not match engine/cef.lock.json. "

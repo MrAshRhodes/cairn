@@ -26,6 +26,28 @@ private final class TestEngine: BrowserEngine {
 }
 
 @MainActor
+private final class SiteDataTestEngine: BrowserEngine, EngineSiteDataManaging {
+    let kind = EngineKind.chromium
+    let displayName = "Site data engine"
+    let versionDescription = "Test 1"
+    var cleared: [(profile: String, site: String?, kinds: SiteDataKinds)] = []
+    var failures: [String] = []
+    var blocking: ContentBlockingConfiguration?
+    var orphanCalls: [Set<String>] = []
+    let blockedRequestCount = 7
+    func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab { TestTab() }
+    func clearBrowsingData(profileID: String, kinds: Set<BrowsingDataKind>) async {}
+    func shutdown() {}
+    func clearSiteData(profileID: String, site: String?, kinds: SiteDataKinds) async -> SiteDataClearResult {
+        cleared.append((profileID, site, kinds))
+        return SiteDataClearResult(failures: failures)
+    }
+    func deleteProfileData(profileID: String) async {}
+    func removeOrphanProfiles(keeping profileIDs: Set<String>) -> [String] { orphanCalls.append(profileIDs); return [] }
+    func configureContentBlocking(_ configuration: ContentBlockingConfiguration) { blocking = configuration }
+}
+
+@MainActor
 private final class TestTab: EngineTab {
     let id = UUID()
     let view = NSView()
@@ -139,6 +161,118 @@ struct BrowserServicesTests {
         #expect(model.selectedTabID != first)
     }
 
+    @Test(arguments: [false, true])
+    func mostRecentSpaceConsidersOrdinaryAndPinnedTabs(pinned: Bool) {
+        let tabs = [10.0, 30.0, 20.0].map { TabItem(lastActiveAt: Date(timeIntervalSince1970: $0)) }
+        let recent = Space(name: "Recent", pinned: pinned ? tabs : [], tabs: pinned ? [] : tabs)
+        let olderTab = TabItem(lastActiveAt: Date(timeIntervalSince1970: 25))
+        let older = Space(name: "Older", pinned: pinned ? [] : [olderTab], tabs: pinned ? [olderTab] : [])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [Space(name: "Empty first"), older, recent, Space(name: "Empty last")],
+            selectedSpaceID: older.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == recent.id)
+        #expect(model.selectedSpace.id == older.id)
+    }
+
+    @Test func mostRecentSpaceIgnoresArchivedTabs() {
+        let active = Space(name: "Active", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let archived = Space(name: "Archived", archive: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 30))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [archived, active], selectedSpaceID: archived.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == active.id)
+    }
+
+    @Test func mostRecentSpaceKeepsFirstSpaceWhenActivityTies() {
+        let date = Date(timeIntervalSince1970: 20)
+        let first = Space(name: "First", tabs: [TabItem(lastActiveAt: date)])
+        let second = Space(name: "Second", pinned: [TabItem(lastActiveAt: date)])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [first, second], selectedSpaceID: second.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == first.id)
+    }
+
+    @Test func mostRecentSpaceKeepsFirstSpaceWhenAllSpacesAreEmpty() {
+        let first = Space(name: "First")
+        let second = Space(name: "Second")
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [first, second], selectedSpaceID: second.id))
+        let services = BrowserServices(model: model)
+
+        #expect(services.mostRecentSpaceID == first.id)
+    }
+
+    @Test(arguments: [LinkDestination.mostRecent, .space(UUID())])
+    func externalLinksUseMostRecentSpaceForFallbackDestinations(destination: LinkDestination) throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let older = Space(name: "Older", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 10))])
+        let recent = Space(name: "Recent", pinned: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [older, recent], selectedSpaceID: older.id))
+        let services = BrowserServices(model: model, directory: directory)
+        try services.linkRules.update(rules: [], defaultDestination: destination, peekEnabled: true)
+        let url = try #require(URL(string: "https://example.com/external"))
+
+        services.openExternalLink(url)
+
+        #expect(model.selectedSpace.id == recent.id)
+        #expect(model.selectedTab?.url == url)
+        #expect(model.workspace.spaces[0].tabs.count == 1)
+        #expect(model.workspace.spaces[1].tabs.count == 1)
+    }
+
+    @Test func externalQuickWindowLinksUseMostRecentSpaceWithoutAPersistentTab() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let older = Space(name: "Older", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 10))])
+        let recent = Space(name: "Recent", pinned: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [older, recent], selectedSpaceID: older.id))
+        let services = BrowserServices(model: model, directory: directory)
+        var presented: [UUID] = []
+        services.presentQuickWindow = { id, _ in presented.append(id) }
+        try services.linkRules.update(rules: [], defaultDestination: .quickWindow, peekEnabled: true)
+        let url = try #require(URL(string: "https://example.com/external"))
+
+        services.openExternalLink(url)
+
+        let id = try #require(presented.first)
+        let page = try #require(model.transientPages[id])
+        #expect(presented.count == 1 && model.transientPages.count == 1)
+        #expect(page.kind == .quickWindow && page.spaceID == recent.id && page.profileID == recent.profileID)
+        #expect(model.workspace.spaces[0].tabs.count == 1)
+        #expect(model.workspace.spaces[1].tabs.isEmpty)
+    }
+
+    @Test func externalLinksHonorExplicitSpaceInsteadOfMostRecent() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let destination = Space(name: "Destination")
+        let recent = Space(name: "Recent", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [destination, recent], selectedSpaceID: recent.id))
+        let services = BrowserServices(model: model, directory: directory)
+        let rule = LinkRule(text: "example.com", destination: .space(destination.id))
+        try services.linkRules.update(rules: [rule], defaultDestination: .mostRecent, peekEnabled: true)
+        let url = try #require(URL(string: "https://example.com/external"))
+
+        services.openExternalLink(url)
+
+        #expect(model.selectedSpace.id == destination.id)
+        #expect(model.selectedTab?.url == url)
+        #expect(model.workspace.spaces[0].tabs.count == 1)
+        #expect(model.workspace.spaces[1].tabs.count == 1)
+    }
+
     @Test func splitUsesAnotherTabOrCreatesOneAndTogglesOff() {
         let model = BrowserModel(engine: TestEngine())
         let services = BrowserServices(model: model)
@@ -214,6 +348,45 @@ struct BrowserServicesTests {
         #expect(!services.privacyBusy)
         services.shutdown()
         #expect(engine.stopped)
+    }
+
+    @Test func clearingASpaceAndSiteUsesTheFineGrainedEngineAPI() async {
+        let engine = SiteDataTestEngine()
+        let work = Space(name: "Work", profileID: "work")
+        let model = BrowserModel(engine: engine, workspace: Workspace(spaces: [work, Space(name: "Home", profileID: "home")]))
+        let services = BrowserServices(model: model)
+        await services.clearSiteData(kinds: [.cookies, .storage], site: "example.com", spaceIDs: [work.id])
+        #expect(engine.cleared.count == 1)
+        #expect(engine.cleared[0].profile == "work" && engine.cleared[0].site == "example.com")
+        #expect(engine.cleared[0].kinds == [.cookies, .storage])
+        #expect(services.siteDataNotice == nil && !services.privacyBusy)
+
+        engine.failures = ["partial"]
+        await services.clearSiteData()
+        #expect(Set(engine.cleared.dropFirst().map(\.profile)) == ["work", "home"])
+        #expect(services.siteDataNotice == "partial")
+        #expect(services.issues.isEmpty)
+    }
+
+    @Test func orphanCollectionKeepsEverySpaceProfileAndNeedsAReadableWorkspace() {
+        let engine = SiteDataTestEngine()
+        let model = BrowserModel(engine: engine, workspace: Workspace(spaces: [
+            Space(name: "Work", profileID: "work"), Space(name: "Home", profileID: "home")]))
+        let services = BrowserServices(model: model)
+        services.removeOrphanProfiles()
+        #expect(engine.orphanCalls == [["work", "home"]])
+    }
+
+    @Test func contentBlockingConfigurationReachesTheEngine() throws {
+        let engine = SiteDataTestEngine()
+        let services = BrowserServices(model: BrowserModel(engine: engine))
+        services.contentBlocking.onChange = { services.contentBlockingDidChange() }
+        try services.contentBlocking.importList("ads.example.com", name: "list.txt")
+        services.contentBlocking.setEnabled(true)
+        services.contentBlocking.setBlocking(false, on: "news.example.com")
+        #expect(engine.blocking == ContentBlockingConfiguration(
+            isEnabled: true, blockedHosts: ["ads.example.com"], exemptSites: ["news.example.com"]))
+        #expect(services.blockedRequestCount == 7)
     }
 
     @Test func errorsAreVisibleAndDeduplicated() {

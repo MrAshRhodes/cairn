@@ -1,0 +1,51 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cairn transient fixture</title>
+<style>
+  body { font: 16px system-ui; margin: 24px; }
+  a, button, input { display: block; margin: 16px 0; }
+  #spacer { height: 1800px; }
+</style>
+<h1>Transient page fixture</h1>
+<a id="cross">Cross-site ordinary link</a>
+<a id="same" href="/transient.html?same">Same-site ordinary link</a>
+<a id="auth">Authentication-path link</a>
+<button id="script">Script navigation (not a link)</button>
+<button id="popup">Opener-dependent popup</button>
+<form method="post" action="/dl/post">
+  <input name="posted" value="transient-form">
+  <button id="post">POST form (never intercepted)</button>
+</form>
+<input id="draft" aria-label="Transient draft" value="Initial draft">
+<button id="edit">Make unsaved changes</button>
+<output id="popup-result"></output>
+<div id="spacer"></div>
+<p>Scroll target</p>
+<script>
+  const other = new URL(location.href);
+  other.hostname = location.hostname === "localhost" ? "127.0.0.1" : "localhost";
+  other.pathname = "/transient.html";
+  other.search = "?target";
+  document.querySelector("#cross").href = other.href;
+  const auth = new URL(other); auth.pathname = "/oauth/transient.html";
+  document.querySelector("#auth").href = auth.href;
+  document.querySelector("#script").onclick = () => { location.href = other.href; };
+  document.querySelector("#popup").onclick = () => {
+    window.child = window.open("/transient.html?child", "transient-child", "width=50,height=50,toolbar=no");
+  };
+  document.querySelector("#edit").onclick = () => {
+    document.querySelector("#draft").value = "Unsaved transient draft";
+    window.__transientDirty = true;
+  };
+  addEventListener("beforeunload", event => {
+    if (window.__transientDirty) { event.preventDefault(); event.returnValue = ""; }
+  });
+  addEventListener("message", event => {
+    if (event.origin === location.origin) {
+      document.querySelector("#popup-result").value = JSON.stringify(event.data);
+    }
+  });
+  if (location.search.includes("child") && window.opener) {
+    window.opener.postMessage({ hasOpener: true, cookie: document.cookie }, location.origin);
+  }
+</script>

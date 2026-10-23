@@ -82,6 +82,9 @@ jobs:
     needs: [plan, verify, chromium-gate]
     if: needs.plan.outputs.release == 'true' && inputs.dry_run != true
     strategy:
+      # A failing architecture must not cancel the other one: its assets stay available, so "Re-run failed jobs"
+      # rebuilds only the architecture that failed.
+      fail-fast: false
       matrix:
         include:
           - arch: arm64
@@ -138,6 +141,26 @@ jobs:
           export VERSION="${RELEASE_TAG#v}"
           export BUILD_NUMBER="$VERSION"
           scripts/release.sh
+      # The notarization verdicts and the packaging test logs are copied out of .build because upload-artifact skips
+      # hidden paths, which would silently upload nothing.
+      - name: Collect release logs
+        if: ${{ failure() }}
+        run: |
+          mkdir -p release-logs
+          shopt -s nullglob
+          for log in .build/notarization-result.json .build/dmg-notarization-result.json .build/release-tests/*.log; do
+            if [[ -f "$log" ]]; then cp "$log" "release-logs/$(basename "$log")"; fi
+          done
+      - name: Keep release logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-logs-${{ matrix.arch }}
+          path: release-logs
+          if-no-files-found: ignore
+          retention-days: 14
+          # A re-run of the failed job uploads again under the same name.
+          overwrite: true
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: release-${{ matrix.arch }}

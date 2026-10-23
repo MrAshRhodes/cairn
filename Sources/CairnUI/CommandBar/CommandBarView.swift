@@ -2,8 +2,15 @@ import SwiftUI
 import CairnCore
 import CairnModules
 
+public enum CommandBarAction: Equatable, Sendable {
+    case moveToSpace(UUID), pinToSpace(UUID)
+}
+
 public struct CommandBarMatch: Identifiable {
-    public enum Target { case tab(UUID), command(String), navigation(String) }
+    public enum Target {
+        case tab(UUID), command(String), navigation(String), history(URL)
+        case siteSearch(SiteSearchEngine, String), beginSiteSearch(SiteSearchEngine), action(CommandBarAction)
+    }
     public let id: String
     public let title: String
     public let subtitle: String
@@ -12,38 +19,10 @@ public struct CommandBarMatch: Identifiable {
     public let target: Target
 }
 
-/// Pure result construction keeps keyboard selection independent of SwiftUI's focus machinery.
+/// Result construction without history or site search; kept for callers that only know tabs and commands.
 public enum CommandBarSearch {
     public static func matches(query: String, workspace: Workspace, commands: [Command]) -> [CommandBarMatch] {
-        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let commandOnly = text.hasPrefix(">")
-        let needle = commandOnly ? String(text.dropFirst()).trimmingCharacters(in: .whitespacesAndNewlines) : text
-        func contains(_ values: [String]) -> Bool {
-            needle.isEmpty || needle.split(separator: " ").allSatisfy { word in
-                values.contains { $0.localizedCaseInsensitiveContains(String(word)) }
-            }
-        }
-        var results: [CommandBarMatch] = []
-        if !commandOnly {
-            let groups: [(String, [TabItem])] = [("Favorites", workspace.favorites)] +
-                workspace.spaces.map { ($0.name, $0.pinned + $0.tabs) }
-            for (group, tabs) in groups {
-                for tab in tabs where contains([tab.displayTitle, tab.title, tab.url?.absoluteString ?? "", group]) {
-                    results.append(.init(id: "tab:\(tab.id)", title: tab.displayTitle, subtitle: group + " · " + (tab.url?.host ?? "New Tab"),
-                                         symbol: "rectangle.on.rectangle", shortcut: nil, target: .tab(tab.id)))
-                }
-            }
-        }
-        for command in commands where contains([command.title, command.subtitle ?? ""] + command.keywords) {
-            results.append(.init(id: "command:\(command.id)", title: command.title, subtitle: command.subtitle ?? "Command",
-                                 symbol: command.symbol ?? "command", shortcut: command.shortcut, target: .command(command.id)))
-        }
-        if !text.isEmpty && !commandOnly {
-            results = Array(results.prefix(59))
-            results.append(.init(id: "navigate", title: "Go to “\(text)”", subtitle: "Open a website or search in a new tab",
-                                 symbol: "arrow.up.right", shortcut: "↵", target: .navigation(text)))
-        }
-        return Array(results.prefix(60))
+        CommandBarRanking.rank(query: query, context: CommandBarContext(workspace: workspace, commands: commands))
     }
 
     public static func nextSelection(_ index: Int, delta: Int, count: Int) -> Int {
@@ -54,36 +33,42 @@ public enum CommandBarSearch {
 
 @MainActor
 public struct CommandBarView: View {
-    let model: BrowserModel
-    let commands: () -> [Command]
     let dismiss: () -> Void
-    @ViewState<String> private var query = ""
-    @ViewState<Int> private var selection = 0
-    @ViewState<[Command]> private var availableCommands = []
+    @ViewState<CommandBarModel> private var bar: CommandBarModel
     @FocusState private var focused: Bool
 
-    public init(model: BrowserModel, commands: @escaping () -> [Command], dismiss: @escaping () -> Void) {
-        self.model = model
-        self.commands = commands
+    public init(model: BrowserModel, commands: @escaping () -> [Command], mode: CommandBarMode = .search,
+                history: HistoryStore? = nil, engines: @escaping () -> [SiteSearchEngine] = { [] },
+                report: @escaping (String, String) -> Void = { _, _ in }, dismiss: @escaping () -> Void) {
         self.dismiss = dismiss
-    }
-    private var matches: [CommandBarMatch] {
-        CommandBarSearch.matches(query: query, workspace: model.workspace, commands: availableCommands)
+        _bar = ViewState(initialValue: CommandBarModel(mode: mode, browser: model, history: history, commands: commands(),
+                                                        engines: engines, report: report))
     }
 
+    private var matches: [CommandBarMatch] { bar.matches }
+
     public var body: some View {
+        @Bindable var bar = bar
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-                TextField("Search tabs, commands, or the web", text: $query)
+                if let engine = bar.activeEngine {
+                    Text(engine.name).font(.callout.weight(.medium)).padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(Color.accentColor.opacity(0.18), in: Capsule())
+                        .accessibilityLabel("Searching \(engine.name). Press delete to remove.")
+                }
+                TextField(bar.placeholder, text: $bar.query)
                     .font(.system(size: 18)).textFieldStyle(.plain).focused($focused)
                     .onSubmit { activateSelected() }
                     .onMoveCommand { direction in
-                        if direction == .down { selection = CommandBarSearch.nextSelection(selection, delta: 1, count: matches.count) }
-                        if direction == .up { selection = CommandBarSearch.nextSelection(selection, delta: -1, count: matches.count) }
+                        if direction == .down { bar.moveSelection(1) }
+                        if direction == .up { bar.moveSelection(-1) }
                     }
+                    .onKeyPress(.tab) { bar.handleTab() ? .handled : .ignored }
+                    .onKeyPress(.delete) { bar.handleDeleteOnEmpty() ? .handled : .ignored }
                     .onExitCommand { dismiss() }
-                    .accessibilityLabel("Search tabs, commands, or the web")
+                    .accessibilityLabel(bar.placeholder)
+                    .accessibilityValue(matches.isEmpty ? "No results" : "\(matches.count) results")
                 Button("esc", action: dismiss).buttonStyle(.plain).font(.caption.monospaced())
                     .foregroundStyle(.secondary).help("Close command bar")
             }.padding(22)
@@ -102,20 +87,22 @@ public struct CommandBarView: View {
                                     Spacer()
                                     if let shortcut = match.shortcut { Text(shortcut).font(.caption.monospaced()).foregroundStyle(.secondary) }
                                 }.padding(11).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
-                                    .background(index == selection ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 9))
+                                    .background(index == bar.selection ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 9))
                             }.buttonStyle(.plain).id(index)
-                                .accessibilityAddTraits(index == selection ? .isSelected : [])
+                                .accessibilityLabel("\(match.title), \(match.subtitle)")
+                                .accessibilityAddTraits(index == bar.selection ? .isSelected : [])
                         }
                         if matches.isEmpty {
-                            Text("No matches. Try another word.").foregroundStyle(.secondary).padding(28)
+                            Text(bar.activeEngine == nil ? "No matches. Try another word." : "Type what to search for.")
+                                .foregroundStyle(.secondary).padding(28)
                         }
                     }.padding(9)
                 }.frame(maxHeight: 370)
-                    .onChange(of: selection) { _, value in proxy.scrollTo(value) }
+                    .onChange(of: bar.selection) { _, value in proxy.scrollTo(value) }
             }
             Divider()
             HStack {
-                Text("↑↓ select   ↵ open   esc dismiss")
+                Text("↑↓ select   ↵ open   ⇥ site search   esc dismiss")
                 Spacer()
                 Text("Type > for commands")
             }.font(.system(size: 10, design: .monospaced)).foregroundStyle(.secondary).padding(13)
@@ -123,22 +110,24 @@ public struct CommandBarView: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
         .clipShape(RoundedRectangle(cornerRadius: 18))
         .shadow(color: .black.opacity(0.22), radius: 30, y: 14)
-        .onAppear { availableCommands = commands(); focused = true }
-        .onChange(of: query) { _, _ in selection = 0 }
+        .onAppear {
+            focused = true
+            if bar.startsSelected {
+                DispatchQueue.main.async {
+                    if let editor = NSApp.keyWindow?.firstResponder as? NSTextView, editor.isFieldEditor { editor.selectAll(nil) }
+                }
+            }
+        }
     }
 
     private func activateSelected() {
-        guard matches.indices.contains(selection) else { return }
-        activate(matches[selection])
+        guard matches.indices.contains(bar.selection) else { return }
+        activate(matches[bar.selection])
     }
+
     private func activate(_ match: CommandBarMatch) {
+        if case .beginSiteSearch = match.target { bar.activate(match); return }
         dismiss()
-        switch match.target {
-        case .tab(let id): model.select(id)
-        case .command(let id): availableCommands.first { $0.id == id }?.perform(model)
-        case .navigation(let query):
-            guard let url = URLResolver.resolve(query, searchTemplate: model.searchTemplate) else { return }
-            model.newTab(url: url)
-        }
+        bar.activate(match)
     }
 }

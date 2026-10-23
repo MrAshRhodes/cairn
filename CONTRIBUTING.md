@@ -11,6 +11,27 @@ Chromium is the only shipped engine; there is no CEF-free build mode.
 Use Swift Testing, not XCTest, so tests also work on a Command Line Tools-only
 installation.
 
+## Build, test and CI
+
+```sh
+make test                                          # prepares the pinned CEF, then runs the Swift tests
+scripts/test-release.sh                            # workflows, release scripts, packaging gate and updater tests
+python3 -m unittest discover -s engine/tests -v    # Chromium updater; also the native lifecycle tests once CEF is prepared
+make app                                           # bundles the app and ends with the packaging gate
+scripts/run-smoke.sh                               # bundled Chromium smoke test, as CI runs it (needs a GUI session)
+```
+
+Set `ARCH=x86_64` to cross-build the Intel app on an Apple Silicon Mac (`make app ARCH=x86_64`). `make cef`,
+`app`, `run` and `dmg` take it; `make build` and `make test` always compile for this machine, so leave it unset
+for them. `scripts/bundle-app.sh` finishes with `scripts/verify-bundle.sh`, which fails on any layout,
+Info.plist, architecture, signature or entitlement problem; run it on its own against an app, a ZIP or a DMG
+to see every problem at once.
+
+CI runs these checks for every pull request on Apple Silicon and Intel runners and keeps the logs of a failed
+smoke test. [docs/CI.md](docs/CI.md) says what each step catches and how to reproduce a failure locally.
+Updating Chromium is in [docs/UPDATING_CHROMIUM.md](docs/UPDATING_CHROMIUM.md) and releasing in
+[docs/RELEASING.md](docs/RELEASING.md).
+
 ## Module boundaries
 
 The engine kit defines engine/tab contracts. Core owns workspace state and
@@ -22,6 +43,13 @@ the window.
 Mutable browser state is main-actor isolated. Route tab/Space mutations through
 the browser model so persistence and view selection stay consistent. Installing
 delegates and user scripts must precede the initial page load.
+
+Chromium features live in their own files so parallel work rarely collides: a CEF
+callback in `Sources/CairnChromiumBridge/Handlers/CC<Family>Handler.mm` (skeletons are
+already registered), a tab command in `CCTab+<Feature>.mm`, and its public bridge API in
+your own `// [Feature]` slot of `include/CairnChromiumBridge.h`. The Swift side is
+`ChromiumTab+<Feature>.swift` plus an optional protocol in `EngineTabEvents+<Feature>.swift`;
+never change the frozen `EngineTabDelegate`. See `CCInternal.h` and `EngineTabEvents.swift`.
 
 ## Invariants to preserve
 

@@ -5,15 +5,22 @@ import CairnChromiumBridge
 
 public enum ChromiumEngineModule {
     /// Must run before anything touches NSApplication.shared (AppKit, Sparkle) so CEF's application subclass is the one instantiated.
-    @MainActor @discardableResult public static func prepareApplication() -> Bool {
-        CCChromiumRuntime.prepareApplication()
+    /// `mockKeychain` is for unattended test harnesses only: Chromium then encrypts cookies with a fixed mock key instead of the
+    /// user's Keychain, so a Keychain authorization dialog cannot block loading. Shipping builds must keep it `false`.
+    @MainActor @discardableResult public static func prepareApplication(mockKeychain: Bool = false) -> Bool {
+        CCChromiumRuntime.prepareApplication(withMockKeychain: mockKeychain)
     }
 
     @MainActor public static func register(in registry: EngineRegistry) {
         registry.register(.chromium) { ChromiumEngine() }
     }
 
-    /// Invoke only after the app delegate's save/discard checks have approved quitting.
+    /// Test harnesses only: crashes the tab's renderer process to exercise crash recovery.
+    @MainActor @discardableResult public static func crashRendererForTesting(_ tab: EngineTab) -> Bool {
+        (tab as? ChromiumTab)?.bridge.crashRendererForTesting() ?? false
+    }
+
+    /// Invoke only after save/discard checks AND every live page's close decision approve quitting.
     @MainActor public static func prepareForTermination(completion: @escaping @MainActor () -> Void) {
         CCChromiumRuntime.shutdown {
             MainActor.assumeIsolated { completion() }
@@ -22,49 +29,54 @@ public enum ChromiumEngineModule {
 }
 
 @MainActor
-public final class ChromiumEngine: BrowserEngine {
+public final class ChromiumEngine: BrowserEngine, EnginePagePreferences {
     public let kind = EngineKind.chromium
     public let displayName = "Chromium (CEF, experimental)"
     public var versionDescription: String { CCChromiumRuntime.versionDescription() }
     public private(set) var initializationError: Error?
+    /// Why the last clear could not remove everything, shown in Preferences (never as a per-tab error).
     public private(set) var lastDataRemovalError: String?
     private var tabs: [UUID: WeakTab] = [:]
+    /// Applied to existing tabs when changed and to each new tab before its first load.
+    public var pagePreferences = PagePreferences() {
+        didSet { for tab in tabs.values.compactMap(\.value) { tab.setPagePreferences(pagePreferences) } }
+    }
 
     public init(dataRoot: URL? = nil) {
         let support = dataRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Cairn/Chromium")
         do {
-            try CCChromiumRuntime.start(withRoot: support.path)
+            try CCChromiumRuntime.start(withRoot: EngineStorageRoot.resolve(support).path)
         } catch {
+            if (error as NSError).domain == "org.cairn.Chromium.Startup",
+               case .alreadyRunning(let code) = EngineStartupOutcome(exitCode: (error as NSError).code) {
+                // Another Cairn owns this profile and has been told to show itself; nothing is left to do here.
+                exit(code)
+            }
             initializationError = error
         }
     }
 
     public func makeTab(configuration: EngineConfiguration, initialURL: URL?) -> EngineTab {
         let tab = ChromiumTab(configuration: configuration, error: initializationError)
-        tabs[tab.id] = WeakTab(tab)
-        tabs = tabs.filter { $0.value.value != nil }
+        track(tab)
         if let initialURL { tab.load(initialURL) }
         return tab
     }
 
+    func track(_ tab: ChromiumTab) {
+        tab.engine = self
+        tab.setPagePreferences(pagePreferences)
+        tabs[tab.id] = WeakTab(tab)
+        tabs = tabs.filter { $0.value.value != nil }
+    }
+
     public func clearBrowsingData(profileID: String, kinds: Set<BrowsingDataKind>) async {
-        lastDataRemovalError = nil
-        if kinds.contains(.localStorage) {
-            let message = "Chromium cannot yet clear all origins' local storage while running. Quit Cairn and remove the Space's Chromium profile directory; this also removes that Space's cookies and cache."
-            lastDataRemovalError = message
-            NSLog("%@", message)
-            for tab in tabs.values.compactMap(\.value) where tab.profileID == profileID {
-                tab.report(message)
-            }
-        }
-        guard initializationError == nil else { return }
-        await withCheckedContinuation { continuation in
-            CCChromiumRuntime.clearProfile(Self.profileDirectory(profileID),
-                                           cookies: kinds.contains(.cookies), cache: kinds.contains(.cache)) {
-                continuation.resume()
-            }
-        }
+        var selected: SiteDataKinds = []
+        if kinds.contains(.cookies) { selected.insert(.cookies) }
+        if kinds.contains(.cache) { selected.insert(.cache) }
+        if kinds.contains(.localStorage) { selected.insert(.storage) }
+        _ = await clearSiteData(profileID: profileID, site: nil, kinds: selected)
     }
 
     public func shutdown() {
@@ -84,95 +96,39 @@ public final class ChromiumEngine: BrowserEngine {
     init(_ value: ChromiumTab) { self.value = value }
 }
 
-@MainActor
-private final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDelegate {
-    let id = UUID()
-    let profileID: String
-    private let bridge: CCChromiumTab
-    private let startupError: Error?
-    private var closed = false
-    var view: NSView { bridge.view }
-    private(set) var state = EngineTabState()
-    weak var delegate: EngineTabDelegate? {
-        didSet { delegate?.engineTab(self, didChange: state) }
-    }
-    var zoom: Double {
-        get { bridge.zoom }
-        set { bridge.zoom = newValue }
-    }
-
-    init(configuration: EngineConfiguration, error: Error?) {
-        profileID = configuration.profileID
-        startupError = error
-        bridge = CCChromiumTab(profile: ChromiumEngine.profileDirectory(configuration.profileID),
-                               ephemeral: configuration.isEphemeral)
-        super.init()
-        bridge.delegate = self
-        if let error { report(error.localizedDescription) }
-    }
-
-    func report(_ message: String) {
-        state.errorMessage = message
-        state.isLoading = false
-        state.isSecure = false
-        delegate?.engineTab(self, didChange: state)
-    }
-    func load(_ url: URL) {
-        guard !closed, startupError == nil else { return }
-        guard ["https", "http", "about", "file"].contains(url.scheme?.lowercased() ?? "") else {
-            report("Unsupported URL scheme"); return
+extension ChromiumEngine: EngineSiteDataManaging {
+    public func clearSiteData(profileID: String, site: String?, kinds: SiteDataKinds) async -> SiteDataClearResult {
+        lastDataRemovalError = nil
+        if let initializationError {
+            lastDataRemovalError = initializationError.localizedDescription
+            return SiteDataClearResult(failures: [initializationError.localizedDescription])
         }
-        state.url = url
-        state.isLoading = true
-        state.progress = 0
-        state.isSecure = false
-        state.errorMessage = nil
-        delegate?.engineTab(self, didChange: state)
-        bridge.loadURL(url.absoluteString)
+        let failures: [String] = await withCheckedContinuation { continuation in
+            CCChromiumRuntime.clearSiteData(forProfile: Self.profileDirectory(profileID), site: site,
+                                            cookies: kinds.contains(.cookies), cache: kinds.contains(.cache),
+                                            storage: kinds.contains(.storage)) { continuation.resume(returning: $0) }
+        }
+        lastDataRemovalError = failures.isEmpty ? nil : failures.joined(separator: "\n")
+        return SiteDataClearResult(failures: failures)
     }
-    func goBack() { if !closed { bridge.goBack() } }
-    func goForward() { if !closed { bridge.goForward() } }
-    func reload(ignoringCache: Bool) { if !closed { bridge.reloadIgnoringCache(ignoringCache) } }
-    func stopLoading() { bridge.stop() }
-    func find(_ query: String, forward: Bool, completion: @escaping (Bool) -> Void) {
-        bridge.find(query, forward: forward) { completion($0) }
-    }
-    func clearFind() { bridge.clearFind() }
-    func evaluateJavaScript(_ source: String, completion: ((Result<Any?, Error>) -> Void)?) {
-        bridge.evaluate(source) { value, error in
-            if let error { completion?(.failure(error)) } else { completion?(.success(value)) }
+
+    public func deleteProfileData(profileID: String) async {
+        guard initializationError == nil else { return }
+        await withCheckedContinuation { continuation in
+            CCChromiumRuntime.deleteProfile(Self.profileDirectory(profileID)) { continuation.resume() }
         }
     }
-    func setUserScripts(_ scripts: [EngineUserScript]) {
-        bridge.setScripts(scripts.map { ["source": $0.source, "injection": $0.injection.rawValue] })
-    }
-    func takeSnapshot(completion: @escaping (NSImage?) -> Void) { bridge.snapshot { completion($0) } }
-    func close() {
-        guard !closed else { return }
-        closed = true
-        bridge.close()
-        bridge.delegate = nil
+
+    @discardableResult
+    public func removeOrphanProfiles(keeping profileIDs: Set<String>) -> [String] {
+        guard initializationError == nil else { return [] }
+        return CCChromiumRuntime.removeOrphanProfilesKeeping(profileIDs.map(Self.profileDirectory))
     }
 
-    func chromiumTab(_ tab: CCChromiumTab, changed value: [String: Any]) {
-        guard !closed else { return }
-        state = EngineTabState(url: (value["url"] as? String).flatMap(URL.init(string:)),
-                               title: value["title"] as? String ?? "",
-                               isLoading: value["isLoading"] as? Bool ?? false,
-                               progress: value["progress"] as? Double ?? 0,
-                               canGoBack: value["canGoBack"] as? Bool ?? false,
-                               canGoForward: value["canGoForward"] as? Bool ?? false,
-                               isSecure: value["isSecure"] as? Bool ?? false,
-                               errorMessage: value["error"] as? String)
-        delegate?.engineTab(self, didChange: state)
+    public func configureContentBlocking(_ configuration: ContentBlockingConfiguration) {
+        CCChromiumRuntime.setContentBlockingEnabled(configuration.isEnabled, blockedHosts: configuration.blockedHosts,
+                                                    exemptSites: configuration.exemptSites)
     }
-    func chromiumTab(_ tab: CCChromiumTab, popup url: String, activate: Bool) {
-        guard let url = URL(string: url), ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return }
-        delegate?.engineTab(self, requestsNewTab: url, activate: activate)
-    }
-    func chromiumTab(_ tab: CCChromiumTab, download url: String, filename: String) {
-        guard let url = URL(string: url) else { return }
-        delegate?.engineTab(self, requestsDownload: url, suggestedFilename: filename)
-    }
-    func chromiumTabRequestsClose(_ tab: CCChromiumTab) { delegate?.engineTabDidRequestClose(self) }
+
+    public var blockedRequestCount: Int { Int(CCChromiumRuntime.blockedRequestCount()) }
 }

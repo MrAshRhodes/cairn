@@ -4,6 +4,14 @@ on:
     branches: [main]
   pull_request:
   workflow_call:
+  # Also lets the Chromium maintenance workflow start CI for the pull request it opens: pushes made with the
+  # default token do not trigger pull_request workflows.
+  workflow_dispatch:
+    inputs:
+      upload_development_artifacts:
+        description: Retain unsigned development disk images as workflow artifacts
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -11,10 +19,18 @@ concurrency:
   cancel-in-progress: true
 jobs:
   test:
+    name: test (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
         runner: [macos-15, macos-15-intel]
+        include:
+          - runner: macos-15
+            arch: arm64
+            platform: macosarm64
+          - runner: macos-15-intel
+            arch: x86_64
+            platform: macosx64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     steps:
@@ -22,7 +38,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Show toolchain
-        run: swift --version
+        run: |
+          swift --version
+          python3 --version
+          echo "runner architecture: $(uname -m) (expected ${{ matrix.arch }})"
+          [ "$(uname -m)" = "${{ matrix.arch }}" ]
       - name: Install missing validation tools
         run: |
           command -v shellcheck >/dev/null || brew install shellcheck
@@ -31,17 +51,50 @@ jobs:
         run: |
           actionlint
           scripts/test-release.sh
+      - name: Offline Chromium updater tests
+        run: python3 -m unittest discover -s engine/tests -v
+      # Only the archive is cached. fetch verifies its size and checksums on every use, so a damaged or
+      # stale entry is downloaded again rather than trusted; extraction and the wrapper build always run.
+      - name: Restore pinned CEF archive
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: engine/.cache/cef_binary_*_${{ matrix.platform }}_minimal.tar.bz2
+          key: cef-archive-${{ matrix.platform }}-${{ hashFiles('engine/cef.lock.json') }}
       - name: Prepare Chromium
         run: make cef
+      # These compile small native fixtures against the prepared CEF headers and wrapper, so they skip in the offline
+      # step above and must run here, on both architectures.
+      - name: Chromium native regressions
+        run: |
+          python3 -m unittest discover -s engine/tests -p 'test_lifecycle.py' -v
+          python3 -m unittest discover -s engine/tests -p 'test_download_retry.py' -v
       - name: Test
         run: scripts/swiftw test
+      # Retries once, and only for the documented teardown-watchdog flake after the success marker. The logs go to a
+      # directory without a leading dot because upload-artifact skips hidden paths such as .build.
       - name: Check Chromium rendering
-        run: python3 engine/smoke.py --development-ad-hoc
-      - name: Package Chromium app and disk image
+        timeout-minutes: 20
+        env:
+          SMOKE_LOG_DIR: smoke-logs
+        run: scripts/run-smoke.sh
+      - name: Keep smoke logs and crash reports
+        if: ${{ failure() || hashFiles('smoke-logs/attempt-2/console.log') != '' }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: smoke-logs-${{ matrix.runner }}
+          path: smoke-logs
+          if-no-files-found: warn
+          retention-days: 14
+          # A re-run of the failed job uploads again under the same name.
+          overwrite: true
+      # bundle-app.sh ends with scripts/verify-bundle.sh, which fails the build on any packaging error.
+      - name: Package and verify Chromium app and disk image
         run: |
           scripts/bundle-app.sh
           scripts/make-dmg.sh
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - name: Upload development disk images
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_development_artifacts }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: cairn-development-${{ matrix.runner }}
           path: dist/*.dmg

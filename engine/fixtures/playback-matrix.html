@@ -1,0 +1,136 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Local playback matrix</title>
+<button id="run">Run synthetic playback checks</button>
+<pre id="results"></pre>
+<script>
+// Original synthetic fixtures: no downloaded media, licensed streams or CDMs.
+const formats = [
+  'audio/wav; codecs="1"',
+  'video/webm; codecs="vp8"',
+  'video/webm; codecs="vp9"',
+  'video/webm; codecs="av01.0.04M.08"',
+  'video/mp4; codecs="avc1.42E01E"',
+  'audio/mp4; codecs="mp4a.40.2"'
+];
+window.matrix = { done: false, playback: [], capabilities: [], eme: [] };
+
+function deadline(promise, milliseconds, label) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(label + ' timed out')), milliseconds);
+  })]).finally(() => clearTimeout(timer));
+}
+
+function wave() {
+  const samples = 8000;
+  const bytes = new ArrayBuffer(44 + samples * 2);
+  const view = new DataView(bytes);
+  const text = (offset, value) => [...value].forEach((ch, i) => view.setUint8(offset + i, ch.charCodeAt(0)));
+  text(0, 'RIFF'); view.setUint32(4, bytes.byteLength - 8, true); text(8, 'WAVE');
+  text(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true); view.setUint32(24, samples, true); view.setUint32(28, samples * 2, true);
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); text(36, 'data');
+  view.setUint32(40, samples * 2, true);
+  for (let i = 0; i < samples; i++) view.setInt16(44 + i * 2, Math.sin(i * 2 * Math.PI * 440 / samples) * 2000, true);
+  return new Blob([bytes], { type: 'audio/wav' });
+}
+
+async function videoFixture(type) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 64; canvas.height = 64;
+  const context = canvas.getContext('2d');
+  const stream = canvas.captureStream(20);
+  let recorder, interval;
+  try {
+    recorder = new MediaRecorder(stream, { mimeType: type });
+    const chunks = [];
+    recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); };
+    const stopped = new Promise((resolve, reject) => {
+      recorder.onstop = resolve;
+      recorder.onerror = event => reject(event.error || new Error('Recorder failed'));
+    });
+    recorder.start();
+    let frame = 0;
+    interval = setInterval(() => {
+      context.fillStyle = ++frame % 2 ? '#174d8a' : '#eac447';
+      context.fillRect(0, 0, 64, 64);
+      if (frame === 10 && recorder.state === 'recording') recorder.stop();
+    }, 50);
+    await deadline(stopped, 3000, 'Synthetic video encoding');
+    if (!chunks.length) throw new Error('Encoder returned no bytes');
+    return new Blob(chunks, { type });
+  } finally {
+    clearInterval(interval);
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+    stream.getTracks().forEach(track => track.stop());
+  }
+}
+
+async function decode(blob, video) {
+  const media = document.createElement(video ? 'video' : 'audio');
+  media.muted = true;
+  const url = URL.createObjectURL(blob);
+  document.body.append(media);
+  let interval;
+  try {
+    const played = new Promise((resolve, reject) => {
+      media.onerror = () => reject(new Error('Media decode error ' + media.error?.code));
+      interval = setInterval(() => {
+        if (media.currentTime >= 0.1 && (!video || media.getVideoPlaybackQuality().totalVideoFrames > 0)) {
+          resolve({
+            seconds: media.currentTime,
+            decodedFrames: video ? media.getVideoPlaybackQuality().totalVideoFrames : null,
+            bytes: blob.size
+          });
+        }
+      }, 20);
+    });
+    media.src = url;
+    await deadline(Promise.all([media.play(), played]), 4000, 'Synthetic playback');
+    return await played;
+  } finally {
+    clearInterval(interval);
+    media.pause();
+    media.removeAttribute('src');
+    media.load();
+    media.remove();
+    URL.revokeObjectURL(url);
+  }
+}
+
+document.getElementById('run').onclick = async () => {
+  document.getElementById('run').disabled = true;
+  const probe = document.createElement('video');
+  matrix.capabilities = formats.map(type => ({
+    type, canPlayType: probe.canPlayType(type),
+    mediaSource: typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(type),
+    evidence: 'capability-only, not decoded playback'
+  }));
+  for (const type of formats.slice(0, 3)) {
+    const video = type.startsWith('video/');
+    if (video && !MediaRecorder.isTypeSupported(type)) {
+      matrix.playback.push({ type, status: 'not-tested', reason: 'Synthetic encoder unavailable' });
+      continue;
+    }
+    try {
+      const blob = video ? await videoFixture(type) : wave();
+      matrix.playback.push({ type, status: 'passed', ...await decode(blob, video) });
+    } catch (error) {
+      matrix.playback.push({ type, status: 'failed', error: String(error) });
+    }
+  }
+  for (const keySystem of ['com.widevine.alpha', 'com.apple.fps']) {
+    try {
+      await deadline(navigator.requestMediaKeySystemAccess(keySystem, [{
+        initDataTypes: ['cenc'], videoCapabilities: [{ contentType: 'video/mp4; codecs="avc1.42E01E"' }]
+      }]), 3000, keySystem);
+      matrix.eme.push({ keySystem, status: 'capability-only', protectedPlayback: 'not-tested' });
+    } catch (error) {
+      matrix.eme.push({ keySystem, status: 'unavailable', error: error.name, detail: error.message });
+    }
+  }
+  matrix.done = true;
+  document.getElementById('results').textContent = JSON.stringify(matrix, null, 2);
+};
+</script>

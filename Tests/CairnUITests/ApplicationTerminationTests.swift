@@ -95,4 +95,82 @@ struct ApplicationTerminationTests {
         #expect(checkedAgain)
         #expect(termination.request(approval: { true }) { _ in } == .terminateNow)
     }
+
+    @Test func stuckPreparationReportsFailureInsteadOfSuccessfulTermination() async throws {
+        let replies = AsyncStream<Bool>.makeStream()
+        let termination = ApplicationTerminationCoordinator(prepare: { _ in }, deadline: .milliseconds(30))
+        var failures = 0
+
+        #expect(termination.request(approval: { true }, failed: { failures += 1 }) { replies.continuation.yield($0) } == .terminateLater)
+        #expect(termination.request(approval: { true }) { _ in } == .terminateLater)
+        var iterator = replies.stream.makeAsyncIterator()
+        #expect(await iterator.next() == false)
+        #expect(failures == 1)
+        #expect(termination.request(approval: { true }) { _ in } == .terminateCancel)
+        replies.continuation.finish()
+    }
+
+    @Test func completingBeforeTheDeadlineRepliesOnlyOnce() async throws {
+        var replies = 0
+        let termination = ApplicationTerminationCoordinator(prepare: { $0() }, deadline: .milliseconds(30))
+        _ = termination.request(approval: { true }) { _ in replies += 1 }
+        try await Task.sleep(for: .milliseconds(120))
+        #expect(replies == 1)
+    }
+
+    @Test func humanDecisionHasNoTeardownDeadlineAndStayCanBeRetried() async throws {
+        var decide: (@MainActor (Bool) -> Void)?
+        var prepares = 0
+        var replies: [Bool] = []
+        var flushes = 0
+        let termination = ApplicationTerminationCoordinator(prepare: { done in prepares += 1; done() },
+                                                             deadline: .milliseconds(20))
+        let pages: CairnApp.PageCloseApproval = { decide = $0 }
+        #expect(termination.request(approval: { true }, pageApproval: pages,
+                                    commitApproval: { flushes += 1; return true }) { replies.append($0) } == .terminateLater)
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(prepares == 0)
+        #expect(replies.isEmpty)
+        #expect(flushes == 0)
+        let stale = try #require(decide)
+        stale(false)
+        #expect(replies == [false])
+        #expect(termination.request(approval: { true }, pageApproval: pages) { replies.append($0) } == .terminateLater)
+        await Task.yield()
+        stale(true)
+        #expect(prepares == 0)
+        decide?(true)
+        #expect(prepares == 1)
+        #expect(replies == [false, true])
+    }
+
+    @Test func repeatedQuitDoesNotRepeatPageOrPersistencePrompts() async throws {
+        var decide: (@MainActor (Bool) -> Void)?
+        var decisions = 0
+        var flushes = 0
+        var replies: [Bool] = []
+        let termination = ApplicationTerminationCoordinator(prepare: { $0() })
+        let pages: CairnApp.PageCloseApproval = { decisions += 1; decide = $0 }
+        for _ in 0..<3 {
+            #expect(termination.request(approval: { true }, pageApproval: pages,
+                                        commitApproval: { flushes += 1; return true }) { replies.append($0) } == .terminateLater)
+        }
+        await Task.yield()
+        #expect(decisions == 1)
+        decide?(true)
+        decide?(false)
+        #expect(flushes == 1)
+        #expect(replies == [true])
+    }
+
+    @Test func persistenceVetoAfterPageApprovalDoesNotStartEngineTeardown() async {
+        var preparations = 0
+        var replies: [Bool] = []
+        let termination = ApplicationTerminationCoordinator { _ in preparations += 1 }
+        #expect(termination.request(approval: { true }, pageApproval: { $0(true) },
+                                    commitApproval: { false }) { replies.append($0) } == .terminateLater)
+        await Task.yield()
+        #expect(preparations == 0)
+        #expect(replies == [false])
+    }
 }

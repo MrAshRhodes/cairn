@@ -43,7 +43,7 @@ struct BrowserView: View {
     var body: some View {
         HStack(spacing: 0) {
             if services.sidebarVisible {
-                SidebarView(model: model, showCommandBar: { services.commandBarPresented = true }, services: services)
+                SidebarView(model: model, showCommandBar: { services.showCommandBar(mode: .search) }, services: services)
                     .frame(width: min(max(services.settings.sidebarWidth, 200), 420))
                     .background(.regularMaterial)
             }
@@ -82,17 +82,33 @@ struct BrowserView: View {
             .background(colorScheme == .dark ? Color(nsColor: .windowBackgroundColor) : Color(cairnHex: "#F3F2ED"))
         }
         .tint(accent)
-        .disabled(services.commandBarPresented)
-        .allowsHitTesting(!services.commandBarPresented)
-        .accessibilityHidden(services.commandBarPresented)
+        .disabled(services.commandBarPresented || model.closingTabID != nil || model.peek.isOpen)
+        .allowsHitTesting(!services.commandBarPresented && model.closingTabID == nil && !model.peek.isOpen)
+        .accessibilityHidden(services.commandBarPresented || model.closingTabID != nil || model.peek.isOpen)
+        .overlay {
+            if let id = model.peek.tabID {
+                PeekOverlay(services: services, tabID: id, ownerTabID: model.peek.ownerTabID)
+            }
+        }
+        .overlay {
+            if let id = model.closingTabID { PageCloseOverlay(model: model, tabID: id) }
+        }
+        .overlay {
+            if services.tabSwitcher.isPresented {
+                TabSwitcherView(switcher: services.tabSwitcher, model: model)
+            }
+        }
         .overlay {
             if services.commandBarPresented {
                 ZStack(alignment: .top) {
                     Color.black.opacity(0.22).ignoresSafeArea()
                         .onTapGesture { services.commandBarPresented = false }
                         .accessibilityHidden(true)
-                    CommandBarView(model: model, commands: { services.commands() },
+                    CommandBarView(model: model, commands: { services.commands() }, mode: services.commandBarMode,
+                                   history: services.history, engines: { services.siteSearch.engines },
+                                   report: { services.report($0, detail: $1) },
                                    dismiss: { services.commandBarPresented = false })
+                        .id(services.commandBarMode)
                         .frame(width: 610).padding(.top, 100)
                 }
             }
@@ -104,6 +120,8 @@ struct BrowserView: View {
             case .boosts: BoostsView(services: services)
             case .archive: ArchiveView(model: model)
             case .history: HistoryView(services: services)
+            case .shortcuts: ShortcutsPane(services: services)
+            case .importer: ImportWizardView(services: services)
             case .moduleTrust:
                 if let review = services.moduleReview {
                     ScriptTrustReview(title: review.title, source: review.source,
@@ -172,7 +190,7 @@ struct BrowserView: View {
                 if addressFocused {
                     Text("↵").foregroundStyle(.tertiary)
                 } else if services.zoom != 1 {
-                    Button("\(Int(services.zoom * 100))%") { services.setZoom(1) }
+                    Button("\(Int(services.zoom * 100))%") { services.perform(action: "ui.zoom-reset") }
                         .font(.caption.monospacedDigit()).buttonStyle(.plain).help("Reset zoom")
                 }
             }
@@ -183,9 +201,12 @@ struct BrowserView: View {
             SymbolButton(title: "Downloads", symbol: "arrow.down.circle") { services.sheet = .downloads }
             Menu {
                 Button("Find in Page") { services.findPresented = true }
-                Button("Zoom In") { services.setZoom((services.activeEngineTab?.zoom ?? 1) + 0.1) }
-                Button("Zoom Out") { services.setZoom((services.activeEngineTab?.zoom ?? 1) - 0.1) }
-                Button("Actual Size") { services.setZoom(1) }
+                Button("Zoom In") { services.perform(action: "ui.zoom-in") }
+                    .disabled(!services.isEnabled(action: "ui.zoom-in"))
+                Button("Zoom Out") { services.perform(action: "ui.zoom-out") }
+                    .disabled(!services.isEnabled(action: "ui.zoom-out"))
+                Button("Actual Size") { services.perform(action: "ui.zoom-reset") }
+                    .disabled(!services.isEnabled(action: "ui.zoom-reset"))
                 Divider()
                 if let tab = model.selectedTab {
                     Button("Pin Tab") { model.pin(tab.id) }
@@ -199,6 +220,7 @@ struct BrowserView: View {
                     }
                 }
                 Divider()
+                Button("Import…") { services.presentImporter() }
                 Button("Boosts…") { services.sheet = .boosts }
                 Button("Settings…") { services.sheet = .preferences }
             } label: { Image(systemName: "ellipsis").frame(width: 28, height: 32) }
@@ -238,12 +260,8 @@ struct BrowserView: View {
     }
 
     @ViewBuilder private var content: some View {
-        if model.splitTabIDs.count == 2 {
-            HSplitView {
-                ForEach(model.splitTabIDs, id: \.self) { id in
-                    pane(id, split: true).frame(minWidth: 240)
-                }
-            }
+        if let group = model.activeSplit {
+            SplitContainerView(model: model, group: group) { id in pane(id, split: true) }
         } else if let id = model.selectedTabID, model.item(id) != nil {
             pane(id, split: false)
         } else { StartPage(services: services) }
@@ -262,11 +280,12 @@ struct BrowserView: View {
                             Spacer()
                         }.padding(8).contentShape(Rectangle())
                     }.buttonStyle(.plain).accessibilityLabel("Focus \(model.item(id)?.displayTitle ?? "pane")")
-                    SymbolButton(title: "Close Split View", symbol: "rectangle") {
-                        services.selectTab(id); model.closeSplit()
+                    SymbolButton(title: "Remove Pane from Split View", symbol: "xmark") {
+                        model.removeFromSplit(id)
                     }
                 }.font(.caption).background(.regularMaterial)
             }
+            TabHealthBanner(model: model, tabID: id)
             if let error = model.tabStates[id]?.errorMessage {
                 HStack {
                     Image(systemName: "exclamationmark.triangle")
@@ -275,6 +294,7 @@ struct BrowserView: View {
                     Button("Try Again") { model.liveTab(for: id)?.reload(ignoringCache: false) }
                 }.padding(16).background(Color.orange.opacity(0.1))
             }
+            BlockedPopupBanner(model: model, tabID: id)
             if model.item(id)?.url == nil {
                 StartPage(services: services, tabID: id)
             } else {
@@ -283,6 +303,9 @@ struct BrowserView: View {
             }
         }
         .background(.background)
+        .overlay {
+            if model.closingTabID != id { TabPromptOverlay(model: model, tabID: id) }
+        }
         .overlay(alignment: .bottomLeading) {
             if split && model.selectedTabID != id {
                 Button("Focus pane") { services.selectTab(id) }

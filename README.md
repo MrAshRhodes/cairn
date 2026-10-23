@@ -52,6 +52,9 @@ make app    # or `make run` to build and open it
 the first run downloads and verifies the pinned archive (about 130 MB) and builds
 its wrapper for your Mac's architecture; later runs reuse the verified cache.
 The generated `dist/Cairn.app` bundles **Chromium and its matching helper processes**.
+Both architecture records include SHA-256 pins derived from archives checked
+against the publisher's size and SHA-1. This detects later changes to those bytes;
+it is not independent publisher authentication.
 There is no engine selector or WebKit fallback. Older settings files remain
 readable, but their engine choice is ignored. Website cookies and storage from
 older WebKit builds are not migrated into Chromium profiles.
@@ -69,24 +72,68 @@ downloads.
 ## Developer preview status
 
 The implementation includes native Spaces, vertical tabs,
-favorites and pins, session restoration and archiving, command search, split
-browsing, find/zoom, local history, downloads, and CSS/JavaScript Boosts with an
-explicit trust decision. Downloads are delegated to Cairn's URL-based downloader;
-website cookies are not forwarded, so downloads requiring a website sign-in may fail.
+favorites and pins, session restoration and archiving, a command bar with site
+search and a remappable keyboard map (with an Arc-compatible preset), split
+browsing with up to four panes, find/zoom, local history, downloads, and CSS/JavaScript
+Boosts with an explicit trust decision. Newer pieces: sidebar folders and Space themes, a consent-based
+importer for Chromium-family browsers ([docs](docs/features/import.md)), a visual Boost
+editor with Zap and `.cairnboost` sharing ([docs](docs/features/boosts.md)), and link
+routing rules ([docs](docs/features/links.md); Peek overlay and quick window are not built
+yet). Developer Tools, view source, printing / Save Page as PDF and per-site zoom are
+available through the menus and command bar, with remappable shortcuts.
+Downloads started by a page, including **Download Linked File** and **Save Image As…**
+in its context menu, are performed by Chromium
+itself, so the page's cookies, sign-in, POST body and `blob:` sources are kept; Cairn
+asks where to save, shows progress, and supports pause, resume and cancel. Failed
+downloads have a [conservative engine retry](docs/features/downloads.md) when the
+original GET transfer, tab, Space and destination remain usable; other failures
+explain why the download must be restarted from its page. Only links
+pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
+website cookies.
 
-Automated tests cover the integrated services and legacy settings compatibility. The
-bundled arm64 Chromium engine has also passed native rendering checks for CSS
+Chromium integration also includes gesture-gated popups with opener/context
+preservation, site permission and JavaScript dialog prompts, HTTP authentication,
+fail-closed TLS handling, favicon and audio/mute state, DevTools, page source,
+PDF export/viewing, per-site zoom and language/user-agent preferences. Renderer
+crashes and stalled navigation have visible recovery states; startup and shutdown
+have bounded deadlines. These are implemented capabilities, not a claim of full
+Arc feature parity or production readiness.
+
+Automated tests cover the integrated services and legacy settings compatibility.
+[Recorded local arm64 checks](docs/UPDATING_CHROMIUM.md#updating-and-verification)
+with the committed CEF 154 pin passed native rendering checks for CSS
 grid, container queries, `:has()`, JavaScript modules, network requests, responsive
 viewport resizing, and compositor output, alongside profile isolation and lifecycle
-checks. These are local development checks, not release-security certification.
+checks. The combined engine smoke also exercises popup messaging, permission/dialog
+denials, authenticated/POST/blob downloads, crash recovery, media, PDF export and
+page tools, but it is currently intermittent
+([#31](https://github.com/MrAshRhodes/cairn/issues/31)). These are local development
+checks, not release-security certification or acceptance of a newer CEF build.
 
 ![Actual Chromium rendering of Cairn's local responsive test page](site/assets/chromium-rendering.png)
 
 *Actual engine compositor output. This is a local rendering fixture, not the full
 Cairn shell or a claim that every website works.*
 
-Full interactive Chromium browsing acceptance, VoiceOver, Intel CEF runtime
-testing, Apple Developer ID signing and notarization remain **unverified**.
+[CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
+passed tests, bundled Chromium smoke and ad-hoc packaging on native Apple Silicon
+and Intel runners at commit `8a76627` with CEF 154. No binaries were uploaded.
+Full interactive Chromium browsing acceptance on both architectures, VoiceOver,
+Apple Developer ID signing and notarization remain **unverified**. This CI result
+does not close the full native Intel gate; cross-building or Rosetta cannot replace
+native execution either.
+Camera/microphone approvals, native print/save panels, real-world sign-in flows,
+long-running sessions and website compatibility still require hands-on acceptance.
+Native print and save-panel integration is implemented; these interactions are
+unverified, not missing APIs. Tab, window and app close now ask pages through
+`beforeunload` and keep pages that choose Stay; only explicit Force Close commands
+discard them. Until bundled-smoke and packaged-app acceptance are recorded,
+[issue #22](https://github.com/MrAshRhodes/cairn/issues/22) still blocks a public
+Chromium release, including one labelled a preview.
+See the [release-readiness boundaries](docs/reference/functional-spec.md#release-readiness-boundaries)
+and [release gates](docs/RELEASING.md#public-chromium-release-gates)
+for the remaining feature and validation limits. Historical local smoke results
+are not acceptance of a newer CEF pin or the final downloaded application.
 Private update-signing material remains in the maintainer's local Keychain, not
 GitHub. The weekly release workflow is wired but cannot publish until CI signing
 is explicitly provisioned; see the [release guide](docs/RELEASING.md#weekly-release-automation).
@@ -102,7 +149,10 @@ has separate dependency, helper-process, packaging and security requirements, an
 it is not updated by installing Google Chrome. Follow the [Chromium maintenance guide](docs/UPDATING_CHROMIUM.md);
 do not enable an old CEF build just because it compiles. A version-monitoring
 workflow cannot guarantee upstream fixes exist or ship them without a release.
-The current pin trails Chrome stable; public Chromium distribution remains gated.
+The committed pin still trails Chrome stable; see the guide's dated comparison. The
+newest stable CEF was tried locally but is not adopted because it failed the runtime
+smoke ([#32](https://github.com/MrAshRhodes/cairn/issues/32)). Even closing the
+version gap would not close the other public Chromium release gates.
 
 The historical v0.1.0 download uses **system WebKit**, updated by Apple through
 macOS/Safari updates. This does not describe the current source or future releases.
@@ -140,6 +190,7 @@ JavaScript.
 ## Project guide
 
 - [Functional specification and reference boundaries](docs/reference/functional-spec.md)
+- Features: [command bar](docs/features/command-bar.md), [keyboard shortcuts](docs/features/shortcuts.md), [split view](docs/features/split-view.md)
 - [Contributing and development invariants](CONTRIBUTING.md)
 - [Privacy](PRIVACY.md) and [security policy](SECURITY.md)
 - [Independent implementation policy](docs/CLEAN_ROOM.md)

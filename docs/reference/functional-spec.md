@@ -27,7 +27,7 @@ WebKit profiles. Publish separate Apple Silicon and Intel applications.
 | Pinned tabs | Persistent per-Space tabs with a saved home URL. Closing unloads the view without deleting the pin. |
 | Today tabs | Ordinary tabs, with selection and ordering persisted. Closing removes the tab. |
 | Archive | Inactive ordinary tabs move here after a configurable interval. Selected/split-visible tabs must not be archived while in use. Restoring moves a tab into the active list. |
-| Split view | Two distinct live tabs displayed together. Closing/moving/removing a participating tab must leave a valid layout. |
+| Split view | Two to four distinct live tabs in a resizable layout. Closing/moving/removing a participating tab must leave a valid layout. |
 
 Changing a Space must not silently navigate or mutate tabs in another Space.
 Popups inherit the originating tab's profile. Moving a tab between profiles
@@ -50,6 +50,56 @@ failed TLS must never be bypassed to make navigation work.
 Keyboard operation and accessibility labels are part of the interface, not
 optional alternatives to pointer input.
 
+Tabs show the site's own icon, fetched by Chromium through the Space's network
+stack. Icons are cached on disk per profile (never across profiles; a private
+store would keep them in memory only) and fall back to a globe. A tab playing
+sound shows a speaker in the sidebar that toggles mute; "Mute Tab", "Mute Other
+Tabs" and "Play or Pause Media" are commands. Mute survives navigation. The
+keyboard play/pause key controls the audible tab while it is playing by driving
+its first media element; custom players without one are out of reach.
+Picture-in-Picture: `requestPictureInPicture()` works inside Chromium's Alloy
+runtime (verified in the bundled smoke), so pages' own PiP controls function; an
+automatic mini player on leaving a tab and a floating-panel fallback are not
+built. The pinned Chromium 154 [automatic PiP tab observer](https://github.com/chromium/chromium/blob/154.0.8037.98/chrome/browser/picture_in_picture/auto_picture_in_picture_tab_strip_observer_helper.cc)
+requires a normal Chrome window's tab strip; it does not observe Cairn's native
+Space/split-view selection. CEF's `AllowPictureInPictureWithoutUserActivation`
+hook is for Views-hosted Document PiP, not a native-hosted video-player control.
+An automatic mode therefore still needs a supported engine adapter or a
+same-engine floating-view design, with single-player ownership, split-visible
+eligibility, accessible focus/return controls, and close/Space-switch cleanup.
+Do not substitute a fabricated user gesture, overwrite a site's media-session
+handler, or treat PiP capability as evidence of DRM playback. Per-site zoom
+persistence is described below.
+
+### Page tools
+
+Commands (command bar; menus bind them): *Toggle Developer Tools* (⌥⌘I), *View
+Page Source* (⌥⌘U), *Print…* (⌘P), *Save Page as PDF…* and *Reset Zoom for All Sites*.
+
+- **DevTools** opens in Chromium's own window (CEF 154 only supports its Chrome-style
+  window; an Alloy child view is rejected). It is never a Cairn tab. The remote
+  debugging port stays disabled. Closing is asynchronous: reopening before the window
+  has finished closing only focuses it. `inspectElement(at:)` is the hook for a
+  context-menu *Inspect*.
+- **View source** opens a new tab on `view-source:<page>` in the same Space. Only the
+  browser can open it (typed addresses and page links cannot); only http(s)/file pages.
+- **Print** calls Chromium's native macOS print path, which is intended to show the
+  system print panel (Save as PDF is its PDF menu). Native panel interaction and
+  printed output still require hands-on acceptance. **Save Page as PDF** uses
+  `PrintToPDF` (backgrounds, tagged PDF, `@page` size honored); the local smoke
+  checks PDF bytes, page count and size, not tagged-PDF accessibility conformance.
+- **PDF viewing**: Chromium has a built-in viewer. The local smoke checks successful
+  basic loading with `application/pdf` content or an embedded viewer, not toolbar
+  interaction or complete document rendering.
+- **Zoom** is remembered per Space profile and host in `site-zoom.json` (factor 1
+  removes the entry). It follows navigation between hosts and survives relaunch.
+  Unreadable files are kept untouched; the session then runs without persistence.
+- **Language and user agent** (Settings ▸ General): `Accept-Language` and
+  `navigator.languages` default to the system language list; an optional user agent
+  string overrides Chromium's (advanced: client hints are dropped with it). Both are
+  applied through DevTools emulation before a tab's first load and to open tabs on
+  their next navigation. The Chromium UI language (`CefSettings.locale`) is unchanged.
+
 ## Local customization
 
 Swift modules contribute commands through an explicit registry. Declarative
@@ -64,10 +114,20 @@ secure extension sandbox. Do not automatically fetch or install remote Boosts.
 ## Downloads, privacy and updates
 
 Downloads require a destination chosen by the user, safe filename handling and
-visible cancellation/failure. Authenticated downloads should use the engine's
-own session, not silently restart a request without its credentials.
+visible cancellation/failure. Downloads started by a page are performed by the
+engine itself (so cookies, authentication, POST and `blob:`/`data:` sources keep
+working) and appear in the Downloads sheet with progress, pause, resume and cancel;
+a user cancellation is never reported as a failure. Only links pasted into the sheet
+use Cairn's cookie-less URL downloader. Completed files keep a quarantine attribute.
+Failed engine transfers can retry through their retained Chromium callback only
+when the original GET/context and destination pass the conservative checks in
+[Downloads](../features/downloads.md). POST, blob, redirected/opaque URLs and
+missing-context failures explain how to restart from the page instead. Cancelled,
+paused and completed items are not failed-transfer retries.
 
-History and site data have explicit deletion controls. No history, cookies,
+History and site data have explicit deletion controls (per Space, per site, per data kind); removing a Space
+deletes its profile. A local, user-imported blocklist can block third-party requests, with per-site exemptions.
+No history, cookies,
 page text or customizations are sent to the project maintainers.
 
 Application updates use Sparkle with an independently generated Ed25519 public
@@ -75,6 +135,34 @@ key and signed release artifacts. Missing signing configuration disables updates
 with an explanation; it must not enable unsigned update installation. Chromium
 updates require rebuilding and publishing an application bundle; installing a
 new Chrome app does not update embedded CEF.
+
+## Release-readiness boundaries
+
+The integrated implementation is still a developer preview. Passing the local
+arm64 engine smoke is necessary, but not sufficient, for a public Chromium release.
+Release engineering must also enforce the Chromium currency, signing and artifact
+checks in [the maintenance guide](../UPDATING_CHROMIUM.md) and
+[release guide](../RELEASING.md#public-chromium-release-gates). The two-architecture
+lock includes SHA-256 values derived from archives checked against the publisher's
+size and SHA-1. Those pins establish repeatable bytes, not independent publisher
+authentication. Current evidence must identify the tested CEF pin; dated results
+for an earlier pin do not validate its replacement.
+
+| Area | Implemented boundary or remaining acceptance |
+| --- | --- |
+| Startup and recovery | Restored background tabs are lazy; startup, navigation and renderer failures surface recovery state. The bootstrap blank document must never report completion of the requested page. Long-duration browsing, sleep/wake and memory-pressure acceptance remain open. |
+| Popups | A user gesture is required by default. [Exact-origin exceptions](../features/popups.md), explicitly granted from the blocked-popup banner and revoked in Settings, are scoped to the Space and profile; safe schemes and the per-tab budget always apply. Adopted browsers preserve the opener, messaging and request context, including intentionally blank documents. Requested window geometry is not honored. The first popup document can miss Boost injection; [#24](https://github.com/MrAshRhodes/cairn/issues/24) remains blocked. Requests are not paused or replayed to hide that limitation. Native exception UI validation is a separate release gate. |
+| Permissions and dialogs | Secure-origin/default-deny policy, per-Space site decisions, JavaScript dialogs and HTTP authentication prompts are implemented. Real macOS camera/microphone approvals and site sign-in journeys still need interactive acceptance. |
+| Unsaved-page close safety | Tab, window, Space and app close ask each page through `beforeunload`; Stay keeps the page and its workspace record, and only explicit Force Close commands discard pages. Closing is sequential: pages that already chose Leave stay closed but reload from their saved records. Real-CEF smoke and packaged window/multi-tab quit acceptance remain required before [#22](https://github.com/MrAshRhodes/cairn/issues/22) is closed; until then it remains a public-release blocker. |
+| Downloads | Native page downloads preserve cookies, POST and blob sources, with destination choice and pause/resume/cancel. Failed known-GET transfers have conservative original-context retry with destination/partial-file and lifecycle checks; unsafe or missing context requires restarting from the page. Native retry fixtures, save-panel interaction and downloaded-file handling require recorded acceptance; policy/unit tests alone do not establish it. |
+| Page tools and icons | Favicons, DevTools, native print dispatch, PDF export/viewing, source, language/UA and site zoom are implemented. Native print/save panels, PDF toolbar interaction and private-session zoom policy remain unverified. Service mocks and local engine fixtures do not establish full native UI acceptance. |
+| Workspace and customization | Folders, themes, remappable shortcuts, four-pane splits, Chromium-family import, local Boost editing/sharing and link rules are implemented. Consent-based [Firefox and Safari import](../features/import.md) read only a user-selected profile or file through a read-only snapshot, with an HTML-export fallback, and portable exports can be mapped into new or existing Spaces; native permission-denial and packaged import/mapping GUI acceptance remain open. [Peek and quick windows](../features/links.md) keep transient pages out of saved workspace state until promoted, preserve the same engine on same-profile promotion and never transfer cookies or form state across profiles; packaged keyboard/VoiceOver journeys remain open. Cloud sync and Arc account migration are not implemented. |
+| Compatibility and accessibility | Native arm64/Intel CI passed bundled runtime smoke and ad-hoc packaging at `8a76627` with CEF 154; see the [recorded evidence](../RELEASING.md#building-and-testing-the-intel-app). Full Intel GUI/signed-runtime acceptance, complete keyboard/VoiceOver journeys, real-site sign-in/permissions and sustained website compatibility remain open. Rosetta is not native Intel evidence. Chrome extension and DRM support are not promised. |
+| Distribution and updates | Ad-hoc builds are not Developer ID signed or notarized. Sparkle authentication is separate from Apple trust; downloaded-artifact Gatekeeper acceptance and a real increasing-version update/architecture-selection/profile-preservation journey remain release gates. An unpublished draft does not update the stable feed. |
+
+Do not represent these gaps as completed features or release certification. A
+release that cannot satisfy a safety gate must remain unpublished rather than
+silently disabling the gate.
 
 ## Reference evidence and limits
 

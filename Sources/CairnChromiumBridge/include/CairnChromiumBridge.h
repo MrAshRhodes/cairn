@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import "CCNavigation.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -11,13 +12,12 @@ NS_ASSUME_NONNULL_BEGIN
 @end
 
 @interface CCChromiumRuntime : NSObject
-+ (BOOL)prepareApplication;
+// Test harnesses only: `mockKeychain` swaps Chromium's Keychain-backed cookie-encryption key for a fixed mock key.
++ (BOOL)prepareApplicationWithMockKeychain:(BOOL)mockKeychain;
 + (BOOL)startWithRoot:(NSString *)root error:(NSError *_Nullable *_Nullable)error;
 + (NSString *)versionDescription;
 + (void)shutdown;
 + (void)shutdownWithCompletion:(void (^)(void))completion NS_SWIFT_NAME(shutdown(completion:));
-+ (void)clearProfile:(NSString *)profile cookies:(BOOL)cookies cache:(BOOL)cache
-         completion:(void (^)(void))completion;
 @end
 
 @interface CCChromiumTab : NSObject
@@ -36,6 +36,212 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)setScripts:(NSArray<NSDictionary<NSString *, NSString *> *> *)scripts;
 - (void)snapshot:(void (^)(NSImage *_Nullable))completion;
 - (void)close;
+@end
+
+// FEATURE SLOTS. Additive only: do not edit the declarations above. Each feature adds its public API
+// under its own marker, so features written in parallel do not touch the same lines. Keep the blank
+// line between slots. A slot holds what the feature needs:
+//   - events: a protocol such as CCChromiumTab<Feature>Delegate. The Swift ChromiumTab adopts it in
+//     ChromiumTab+<Feature>.swift and the handler reaches it with
+//     `[tab.delegate conformsToProtocol:@protocol(CCChromiumTab<Feature>Delegate)]`;
+//   - commands: a category, `@interface CCChromiumTab (<Feature>)`, implemented in CCTab+<Feature>.mm.
+// A feature with no marker adds `// [Name]` directly above NS_ASSUME_NONNULL_END.
+
+// [Audio]
+@protocol CCChromiumTabAudioDelegate <NSObject>
+// `playing` follows Chromium's own audible state (with its short recently-audible debounce).
+- (void)chromiumTab:(CCChromiumTab *)tab audioPlayingChanged:(BOOL)playing;
+@end
+
+@interface CCChromiumTab (Audio)
+// The wanted mute state; it survives browser creation and navigation.
+@property(nonatomic) BOOL audioMuted;
+@end
+
+// [ContextMenu]
+@protocol CCChromiumTabContextMenuDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab searchFor:(NSString *)query activate:(BOOL)activate;
+// A page navigated to a non-web scheme (mailto:, tel:, custom). The bridge never launches it itself.
+- (void)chromiumTab:(CCChromiumTab *)tab openExternalURL:(NSString *)url;
+@end
+
+// [Dialog]
+
+// [Display]
+@interface CCChromiumTab (Fullscreen)
+@property(nonatomic, readonly, getter=isFullscreen) BOOL fullscreen;
+- (void)exitFullscreen;
+// Called by the Display handler when the page enters or leaves HTML fullscreen.
+- (void)pageFullscreenChanged:(BOOL)fullscreen;
+@end
+
+@protocol CCChromiumTabFaviconDelegate <NSObject>
+// PNG bytes of the page's icon, or nil when the page has none or none could be fetched.
+- (void)chromiumTab:(CCChromiumTab *)tab faviconPNG:(NSData *_Nullable)png iconURL:(NSString *_Nullable)iconURL;
+@end
+
+// [Download]
+// Downloads outlive tabs, so they are reported to a process-wide delegate instead of a tab delegate.
+// info: id (process-wide, not Chromium's profile-local ID), url, suggestedName, mime, totalBytes, profile, ephemeral.
+// update: id, complete, canceled, interrupted, paused, reason, received, total, percent, speed, path,
+// attempt (explicit retry generation), retryable, retryReason.
+@protocol CCChromiumDownloadDelegate <NSObject>
+- (void)chromiumDownloadWillStart:(NSDictionary<NSString *, id> *)info
+                           decide:(void (^)(NSString *_Nullable path))decide;
+- (void)chromiumDownloadUpdated:(NSDictionary<NSString *, id> *)update;
+@end
+
+@interface CCChromiumDownloads : NSObject
+@property(class, nonatomic, weak, nullable) id<CCChromiumDownloadDelegate> delegate;
++ (void)retry:(uint32_t)identifier attempt:(uint32_t)attempt;
++ (void)cancel:(uint32_t)identifier;
++ (void)pause:(uint32_t)identifier;
++ (void)resume:(uint32_t)identifier;
+@end
+
+// [Drag]
+
+// [Find]
+
+// [Focus]
+@interface CCChromiumTab (Focus)
+// Gives the page keyboard focus (tab switch, pane focus, after the command bar closes).
+- (void)focusContent;
+// Focus the page after the tab joins a window, unless something in the shell is being edited.
+- (void)restoreContentFocus;
+- (void)enableSpellChecking;
+@end
+
+// [Health]
+// Process-level health: `kind` is one of healthy, unresponsive, crashed, navigationStalled, automationUnavailable.
+// `detail` is a user-facing reason or hint and `code` the Chromium termination/exit code (0 when not applicable).
+@protocol CCChromiumTabHealthDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab health:(NSString *)kind detail:(NSString *)detail code:(NSInteger)code;
+@end
+
+// [JSDialog]
+// `type` is alert, confirm, prompt or beforeUnload. A dismissal also covers navigation resetting the dialog.
+@protocol CCChromiumTabJSDialogDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab requestsJSDialog:(NSString *)requestID type:(NSString *)type
+            message:(NSString *)message defaultText:(NSString *)defaultText origin:(NSString *)origin
+           isReload:(BOOL)isReload;
+- (void)chromiumTab:(CCChromiumTab *)tab dismissesJSDialog:(NSString *)requestID;
+@end
+@interface CCChromiumTab (JSDialog)
+- (void)resolveJSDialog:(NSString *)requestID accept:(BOOL)accept text:(nullable NSString *)text
+        suppressFurther:(BOOL)suppressFurther;
+@end
+
+// [Keyboard]
+
+// [LifeSpan]
+@interface CCChromiumTab (Closing)
+// Completion is exactly once: NO on Stay/invalidation, YES once close is irreversible.
+- (void)requestCloseWithCompletion:(void (^)(BOOL approved))completion NS_SWIFT_NAME(requestClose(completion:));
+// Explicit user override only. Resolves an existing request, if any, as approved.
+- (void)forceClose;
+@end
+
+typedef NS_ENUM(NSInteger, CCPopupDisposition) {
+  CCPopupDispositionForeground,
+  CCPopupDispositionBackground,
+  CCPopupDispositionUnsupported,
+};
+
+@protocol CCChromiumTabLifeSpanDelegate <NSObject>
+// Asked synchronously on the main thread while CEF creates a popup. Return the tab that adopts it
+// (created with -initAdoptingPopupFromTab:), or nil to cancel the popup.
+- (nullable CCChromiumTab *)chromiumTab:(CCChromiumTab *)tab hostsPopup:(NSString *)url
+                            disposition:(CCPopupDisposition)disposition userGesture:(BOOL)userGesture;
+@optional
+// Main-frame initiator URL from CEF; empty for subframes and unknown/opaque initiators.
+- (nullable CCChromiumTab *)chromiumTab:(CCChromiumTab *)tab hostsPopup:(NSString *)url
+                            disposition:(CCPopupDisposition)disposition userGesture:(BOOL)userGesture
+                          requestingURL:(NSString *)requestingURL;
+@end
+
+@interface CCChromiumTab (LifeSpan)
+// A tab for a popup CEF creates itself: same profile and request context as `opener`, no CreateBrowser call.
+- (instancetype)initAdoptingPopupFromTab:(CCChromiumTab *)opener;
+@end
+
+// [Load]
+
+// [Permission]
+// `kinds` are SitePermissionKind raw values; requests for anything else are denied inside the bridge.
+@protocol CCChromiumTabPermissionDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab requestsPermission:(NSString *)requestID origin:(NSString *)origin
+           topLevel:(NSString *)topLevel kinds:(NSArray<NSString *> *)kinds;
+- (void)chromiumTab:(CCChromiumTab *)tab dismissesPermission:(NSString *)requestID;
+@end
+@interface CCChromiumTab (Permission)
+- (void)resolvePermission:(NSString *)requestID allow:(BOOL)allow;
+@end
+
+// [Print]
+// Page tools: printing, DevTools window, and per-tab language/user-agent emulation.
+@interface CCChromiumTab (Print)
+/// Presents the system print panel for the page.
+- (void)printPage;
+/// Writes the page as a PDF. `error` is nil on success.
+- (void)printToPDFAtPath:(NSString *)path completion:(void (^)(NSError *_Nullable error))completion;
+@end
+
+@interface CCChromiumTab (DevTools)
+@property(nonatomic, readonly) BOOL hasDevTools;
+/// Opens (or focuses) the DevTools window; a point inspects the element there, in view coordinates.
+- (void)showDevTools;
+- (void)showDevToolsInspectingPoint:(NSPoint)point;
+- (void)closeDevTools;
+@end
+
+@interface CCChromiumTab (Emulation)
+/// Empty strings keep Chromium's defaults. Applies to following navigations; before the first load when set early.
+- (void)setAcceptLanguage:(NSString *)acceptLanguage userAgent:(NSString *)userAgent;
+@end
+
+// [Request]
+// Authentication and blocked-certificate reports. There is deliberately no way to continue past a TLS error.
+@protocol CCChromiumTabRequestDelegate <NSObject>
+- (void)chromiumTab:(CCChromiumTab *)tab requestsAuthentication:(NSString *)requestID url:(NSString *)url
+               host:(NSString *)host port:(NSInteger)port realm:(NSString *)realm scheme:(NSString *)scheme
+            isProxy:(BOOL)isProxy;
+// validFrom/validUntil are seconds since 1970, or 0 when unknown.
+- (void)chromiumTab:(CCChromiumTab *)tab blockedCertificate:(NSString *)url code:(NSInteger)code
+            subject:(NSString *)subject issuer:(NSString *)issuer validFrom:(double)validFrom
+         validUntil:(double)validUntil;
+@optional
+// Navigation/close invalidated this challenge; an answer with this ID is no longer accepted.
+- (void)chromiumTab:(CCChromiumTab *)tab dismissesAuthentication:(NSString *)requestID;
+@end
+@interface CCChromiumTab (Request)
+// A nil username cancels the request.
+- (void)resolveAuthentication:(NSString *)requestID username:(nullable NSString *)username
+                     password:(nullable NSString *)password;
+@end
+
+// [ResourceRequest]
+// Content blocking: immutable rule snapshot swapped under a lock; lookups run on Chromium's IO thread.
+@interface CCChromiumRuntime (ContentBlocking)
++ (void)setContentBlockingEnabled:(BOOL)enabled blockedHosts:(NSArray<NSString *> *)blockedHosts
+                      exemptSites:(NSArray<NSString *> *)exemptSites;
++ (NSUInteger)blockedRequestCount;
+@end
+
+// [SiteData]
+// `profile` is the hashed profile directory name. `site` is a host name or nil for the whole profile.
+@interface CCChromiumRuntime (SiteData)
++ (void)clearSiteDataForProfile:(NSString *)profile site:(nullable NSString *)site cookies:(BOOL)cookies
+                          cache:(BOOL)cache storage:(BOOL)storage
+                     completion:(void (^)(NSArray<NSString *> *failures))completion;
++ (void)deleteProfile:(NSString *)profile completion:(void (^)(void))completion;
++ (NSArray<NSString *> *)removeOrphanProfilesKeeping:(NSArray<NSString *> *)directories;
+@end
+
+// [Testing]
+// Test harnesses only: crashes this tab's renderer to exercise recovery.
+@interface CCChromiumTab (Testing)
+- (BOOL)crashRendererForTesting;
 @end
 
 NS_ASSUME_NONNULL_END

@@ -13,7 +13,7 @@ public struct BrowserIssue: Identifiable {
 }
 
 public enum BrowserSheet: String, Identifiable {
-    case preferences, downloads, boosts, archive, history, moduleTrust
+    case preferences, downloads, boosts, archive, history, moduleTrust, shortcuts, importer
     public var id: String { rawValue }
 }
 
@@ -33,6 +33,7 @@ public final class BrowserServices {
     public let settings: Settings
     public let downloads: DownloadsManager
     public let boosts: BoostStore
+    public let linkRules: LinkRuleStore
     public let modules: ModuleRegistry
     public let updater: UpdateController
     public let directory: URL
@@ -43,6 +44,15 @@ public final class BrowserServices {
     public private(set) var boostsWritable = true
     public var sheet: BrowserSheet?
     public var commandBarPresented = false
+    public var commandBarMode: CommandBarMode = .search
+    public internal(set) var shortcuts = ShortcutMap()
+    public internal(set) var shortcutsWritable = true
+    public private(set) var splitsWritable = true
+    public let siteSearch: SiteSearchStore
+    public let tabSwitcher = TabSwitcher()
+    @ObservationIgnored let splitStore: SplitStore
+    @ObservationIgnored let shortcutStore: ShortcutStore
+    @ObservationIgnored public var onShortcutsChanged: (() -> Void)?
     public var sidebarVisible = true
     public var addressFocusRequest = 0
     public var findPresented = false
@@ -50,11 +60,28 @@ public final class BrowserServices {
     public var findResult: Bool?
     public var zoom: Double = 1
     public var privacyBusy = false
+    /// Why the last website-data clear could not remove everything; shown in Preferences.
+    public internal(set) var siteDataNotice: String?
+    public internal(set) var contentBlocking = ContentBlockingStore()
+    public internal(set) var contentBlockingWritable = true
     public var hasUnsavedBoostChanges = false
     public private(set) var moduleTrustRevision = 0
     var moduleReview: ModuleScriptReview?
     @ObservationIgnored private let workspaceStore: WorkspaceStore
+    @ObservationIgnored var siteZoom: SiteZoomStore?
+    @ObservationIgnored var pdfDestinationChooser: (String) -> URL? = { filename in
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.pdf]
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = filename
+        return panel.runModal() == .OK ? panel.url : nil
+    }
     @ObservationIgnored private var archiveTimer: Timer?
+    @ObservationIgnored private var mediaKeys: MediaKeyController?
+    @ObservationIgnored private var didShutdown = false
+    @ObservationIgnored var quickWindows: [UUID: QuickWindowController] = [:]
+    /// Test/native harnesses may replace presentation, never profile selection or engine ownership.
+    @ObservationIgnored var presentQuickWindow: ((UUID, Bool) -> Void)?
 
     public init(model: BrowserModel, settings: Settings? = nil,
                 directory: URL = WorkspaceStore.defaultDirectory,
@@ -64,9 +91,18 @@ public final class BrowserServices {
         self.directory = directory
         modules = registry ?? ModuleRegistry()
         workspaceStore = WorkspaceStore(directory: directory)
+        splitStore = SplitStore(directory: directory)
+        shortcutStore = ShortcutStore(directory: directory)
+        siteSearch = SiteSearchStore(directory: directory)
         boosts = BoostStore(directory: directory.appendingPathComponent("Boosts", isDirectory: true))
+        linkRules = LinkRuleStore(url: directory.appendingPathComponent("link-rules.json"))
         downloads = DownloadsManager()
         updater = UpdateController()
+        model.newTabLinkDestination = { [weak self] url in self?.routedLinkSpace(for: url) }
+        model.newTabLinkHandler = { [weak self] url, activate in self?.openRoutedQuickWindow(url, activate: activate) ?? false }
+        model.peekEnabled = { [weak self] in self?.linkRules.peekEnabled ?? false }
+        model.onQuickPageCreated = { [weak self] id, activate in self?.showQuickWindow(id, activate: activate) }
+        model.onTransientRemoved = { [weak self] page in self?.quickWindows.removeValue(forKey: page.id)?.finishClose() }
     }
 
     public static func bootstrap(registry suppliedRegistry: EngineRegistry? = nil,
@@ -125,19 +161,42 @@ public final class BrowserServices {
             workspaceWritable = false
             report("Session recovery required", detail: "\(error.localizedDescription)\nYour saved session is preserved. This session will not overwrite it. Reveal the data folder in Settings to recover the file.")
         }
+        let splits = splitStore.load()
+        model.restoreSplits(splits.groups)
+        if let error = splits.error {
+            splitsWritable = splits.quarantinedTo != nil
+            report("Split view layout could not be read", detail: "\(error.localizedDescription)\n"
+                + (splits.quarantinedTo.map { "The file was moved to \($0.lastPathComponent)." } ?? "The original file is preserved. Layouts will not be saved this session."))
+        }
+        splitStore.onError = { [weak self] error in self?.report("Split view layout could not be saved", error: error) }
+        model.onSplitsChange = { [weak self] in
+            guard let self, self.splitsWritable else { return }
+            self.splitStore.scheduleSave(self.model.splitGroups)
+        }
+        siteSearch.onError = { [weak self] title, detail in self?.report(title, detail: detail) }
+        siteSearch.load()
         do { history = try HistoryStore(url: directory.appendingPathComponent("history.sqlite")) }
         catch { report("History is unavailable", error: error) }
+        model.sitePermissions.onError = { [weak self] error in self?.report("Site permissions could not be saved", error: error) }
+        do { try model.sitePermissions.load(from: directory.appendingPathComponent("permissions.json")) }
+        catch { report("Site permissions could not be loaded", detail: "\(error.localizedDescription)\nThe original file is preserved. Choices will not be remembered this session.") }
+        loadPopupExceptions()
         do { try boosts.load() }
         catch {
             boostsWritable = false
             report("Boosts could not be loaded", detail: "\(error.localizedDescription)\nEditing is disabled to preserve your saved Boosts.")
         }
+        model.faviconStore = FaviconStore(directory: directory.appendingPathComponent("Favicons", isDirectory: true))
+        mediaKeys = MediaKeyController(model: model)
+        loadLinkRules()
         model.userScriptProvider = { [weak self] url in self?.boosts.scripts(for: url) ?? [] }
         modules.onError = { [weak self] error in self?.report("Module error", error: error) }
         BuiltinModules.all().forEach { modules.register($0) }
         do { try modules.loadUserModules(from: directory.appendingPathComponent("Modules", isDirectory: true)) }
         catch { report("Some modules could not be loaded", error: error) }
         modules.activate(model: model)
+        loadShortcuts()
+        sweepImportStaging()
         model.onChange = { [weak self] in
             guard let self, self.workspaceWritable else { return }
             self.workspaceStore.scheduleSave(self.model.workspace)
@@ -152,6 +211,18 @@ public final class BrowserServices {
             self?.downloads.start(url: url, suggestedFilename: filename)
             self?.sheet = .downloads
         }
+        loadContentBlocking()
+        removeOrphanProfiles()
+        model.engineDownloadHandler = { [weak self] request, decide in
+            guard let self else { decide(nil); return }
+            self.downloads.beginEngineDownload(request) { url in
+                decide(url)
+                if url != nil { self.sheet = .downloads }
+            }
+        }
+        model.engineDownloadUpdateHandler = { [weak self] update in self?.downloads.applyEngineUpdate(update) }
+        downloads.engineControl = { [weak model] action, id in model?.performEngineDownloadAction(action, id: id) }
+        installPageTools()
         applySettings()
         autoArchive()
         if let selected = model.selectedTabID { model.select(selected) }
@@ -161,7 +232,8 @@ public final class BrowserServices {
     }
 
     public func applySettings() {
-        model.searchTemplate = settings.searchTemplate
+        model.searchTemplate = siteSearch.defaultEngine?.template ?? settings.searchTemplate
+        applyPageSettings()
         autoArchive()
     }
 
@@ -174,19 +246,39 @@ public final class BrowserServices {
 
     public func flush() throws {
         if workspaceWritable { try workspaceStore.saveNow(model.workspace) }
+        if splitsWritable { try splitStore.saveNow(model.splitGroups) }
         if settingsWritable { try settings.save(to: directory.appendingPathComponent("settings.json")) }
     }
 
     public func shutdown() {
+        model.requestCloseAll { [weak self] approved in
+            if approved { self?.finishShutdown() }
+        }
+    }
+
+    private func finishShutdown() {
+        guard !didShutdown else { return }
+        didShutdown = true
         archiveTimer?.invalidate()
         archiveTimer = nil
         model.onChange = nil
         model.onNavigationCommitted = nil
         model.downloadHandler = nil
+        model.newTabLinkDestination = nil
+        model.newTabLinkHandler = nil
+        model.peekEnabled = nil
+        model.onQuickPageCreated = nil
+        model.onTransientRemoved = nil
+        for controller in quickWindows.values { controller.finishClose() }
+        quickWindows.removeAll()
+        model.engineDownloadHandler = nil
+        model.engineDownloadUpdateHandler = nil
+        downloads.engineControl = nil
         model.onError = nil
+        model.onTabHostChanged = nil
+        model.onTabZoomChanged = nil
         downloads.onError = nil
         modules.deactivate()
-        Array(model.liveTabs.keys).forEach { model.unloadTab($0) }
         model.engine.shutdown()
     }
 
@@ -198,7 +290,7 @@ public final class BrowserServices {
     public func dismissIssue(_ id: UUID) { issues.removeAll { $0.id == id } }
 
     public var activeEngineTab: EngineTab? {
-        model.selectedTabID.flatMap { model.liveTab(for: $0) }
+        (activeTransientID ?? model.selectedTabID).flatMap { model.liveTab(for: $0) }
     }
 
     public func focusAddress() {
@@ -213,6 +305,7 @@ public final class BrowserServices {
 
     public func closeTab() {
         if commandBarPresented { commandBarPresented = false; return }
+        if let id = activeTransientID { model.dismissTransient(id); return }
         guard let id = model.selectedTabID else { return }
         model.closeTab(id)
     }
@@ -269,15 +362,6 @@ public final class BrowserServices {
         catch { report("History could not be cleared", error: error) }
     }
 
-    public func clearSiteData() async {
-        privacyBusy = true
-        let profiles = Set(model.workspace.spaces.map(\.profileID))
-        for profile in profiles {
-            await model.engine.clearBrowsingData(profileID: profile, kinds: Set(BrowsingDataKind.allCases))
-        }
-        privacyBusy = false
-    }
-
     public func checkForUpdates() {
         if let error = updater.configurationError {
             report("Updates are not configured", detail: error)
@@ -299,17 +383,40 @@ public final class BrowserServices {
     }
 
     public func commands() -> [Command] {
-        let local: [Command] = [
-            .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", shortcut: "⌘T", perform: { [weak self] _ in self?.newTab() }),
-            .init(id: "ui.address", title: "Edit Address", symbol: "link", shortcut: "⌘L", perform: { [weak self] _ in self?.focusAddress() }),
-            .init(id: "ui.split", title: "Toggle Split View", symbol: "rectangle.split.2x1", shortcut: "⇧⌘D", perform: { [weak self] _ in self?.toggleSplit() }),
-            .init(id: "ui.settings", title: "Settings", symbol: "gearshape", shortcut: "⌘,", perform: { [weak self] _ in self?.sheet = .preferences }),
+        var localBase: [Command] = [
+            .init(id: "ui.quick-window", title: "New Quick Window", symbol: "macwindow", perform: { [weak self] _ in self?.newQuickWindow() }),
+            .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", perform: { [weak self] _ in self?.showCommandBar(mode: .newTab) }),
+            .init(id: "ui.new-blank-tab", title: "New Blank Tab", symbol: "plus.square", perform: { [weak self] _ in self?.newTab() }),
+            .init(id: "ui.address", title: "Edit Address", symbol: "link", perform: { [weak self] _ in self?.editAddress() }),
+            .init(id: "ui.split", title: "Toggle Split View", symbol: "rectangle.split.2x1", perform: { [weak self] _ in self?.toggleSplit() }),
+            .init(id: "ui.split-add-right", title: "Split: Add Pane on the Right", symbol: "rectangle.righthalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .right) }),
+            .init(id: "ui.split-add-left", title: "Split: Add Pane on the Left", symbol: "rectangle.lefthalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .left) }),
+            .init(id: "ui.split-add-top", title: "Split: Add Pane on Top", symbol: "rectangle.tophalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .top) }),
+            .init(id: "ui.split-add-bottom", title: "Split: Add Pane on the Bottom", symbol: "rectangle.bottomhalf.inset.filled", perform: { [weak self] _ in self?.addSplit(edge: .bottom) }),
+            .init(id: "ui.split-remove-pane", title: "Split: Remove Focused Pane", symbol: "rectangle.badge.minus", perform: { [weak self] _ in self?.perform(action: "ui.split-remove-pane") }),
+            .init(id: "ui.split-separate", title: "Split: Separate All Panes", symbol: "rectangle.split.1x2", perform: { [weak self] _ in self?.model.closeSplit() }),
+            .init(id: "ui.reopen-closed-tab", title: "Reopen Closed Tab", symbol: "arrow.uturn.backward", perform: { [weak self] _ in self?.perform(action: "ui.reopen-closed-tab") }),
+            .init(id: "ui.clear-today", title: "Clear Today's Tabs", symbol: "trash", perform: { [weak self] _ in self?.perform(action: "ui.clear-today") }),
+            .init(id: "ui.copy-url", title: "Copy Current URL", symbol: "doc.on.doc", perform: { [weak self] _ in self?.copyCurrentURL() }),
+            .init(id: "ui.copy-markdown-link", title: "Copy Page Link as Markdown", symbol: "text.quote", perform: { [weak self] _ in self?.copyMarkdownLink() }),
+            .init(id: "ui.sidebar", title: "Toggle Sidebar", symbol: "sidebar.left", perform: { [weak self] _ in self?.sidebarVisible.toggle() }),
+            .init(id: "ui.next-space", title: "Select Next Space", symbol: "chevron.right.square", perform: { [weak self] _ in self?.stepSpace(1) }),
+            .init(id: "ui.previous-space", title: "Select Previous Space", symbol: "chevron.left.square", perform: { [weak self] _ in self?.stepSpace(-1) }),
+            .init(id: "ui.shortcuts", title: "Keyboard Shortcuts", symbol: "keyboard", perform: { [weak self] _ in self?.sheet = .shortcuts }),
+            .init(id: "ui.settings", title: "Settings", symbol: "gearshape", perform: { [weak self] _ in self?.sheet = .preferences }),
             .init(id: "ui.boosts", title: "Edit Boosts", symbol: "paintbrush", perform: { [weak self] _ in self?.sheet = .boosts }),
             .init(id: "ui.downloads", title: "Downloads", symbol: "arrow.down.circle", perform: { [weak self] _ in self?.sheet = .downloads }),
             .init(id: "ui.archive", title: "Archived Tabs", symbol: "archivebox", perform: { [weak self] _ in self?.sheet = .archive }),
             .init(id: "ui.history", title: "History", symbol: "clock", perform: { [weak self] _ in self?.sheet = .history }),
-            .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", shortcut: "⌘F", perform: { [weak self] _ in self?.findPresented = true }),
+            .init(id: "ui.import", title: "Import from Another Browser…", symbol: "square.and.arrow.down", perform: { [weak self] _ in self?.presentImporter() }),
+            .init(id: "ui.find", title: "Find in Page", symbol: "magnifyingglass", perform: { [weak self] _ in self?.findPresented = true }),
         ]
+        localBase += pageToolCommands()
+        let local = localBase.map { command -> Command in
+            var shown = command
+            shown.shortcut = shortcuts.chord(for: command.id)?.display
+            return shown
+        }
         let localTitles = Set(local.map { $0.title.lowercased() })
         let moduleCommands = modules.allCommands(for: model).filter { !localTitles.contains($0.title.lowercased()) }
         return local + moduleCommands.map { command in
