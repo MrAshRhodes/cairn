@@ -35,8 +35,11 @@ Each job asserts that the runner really is the architecture it is named for, the
 | Check Chromium rendering | `scripts/run-smoke.sh` | The sandboxed, bundled Chromium smoke test (`engine/smoke.py --development-ad-hoc`); see [Smoke retries](#smoke-retries) |
 | Package and verify | `scripts/bundle-app.sh`, `scripts/make-dmg.sh` | The ad-hoc app and DMG; `bundle-app.sh` ends with `scripts/verify-bundle.sh`, which fails the job on any packaging problem |
 
-The development DMG is uploaded as `cairn-development-<runner>` for 7 days. It is ad-hoc signed and not notarized:
-a functional Chromium check, **not** a Developer ID, hardened-runtime or notarization gate and not a release.
+Packaging and verification run regardless of the artifact-upload choice. The development DMG is uploaded only for a
+manual dispatch with `upload_development_artifacts=true`; the input defaults to `false`, and push, pull-request and
+reusable runs do not upload these binaries. When requested, it is kept as `cairn-development-<runner>` for 7 days.
+It is ad-hoc signed and not notarized: a functional Chromium check, **not** a Developer ID, hardened-runtime or
+notarization gate and not a release.
 
 Release runs the same workflow as its `verify` job, then builds each architecture on its own runner (see
 [RELEASING.md](RELEASING.md#github-actions-maintainer-setup-not-automatic-secret-provisioning)).
@@ -62,7 +65,7 @@ kind, fails the job.
 | Artifact | Uploaded | Contents | Kept |
 | --- | --- | --- | --- |
 | `smoke-logs-<runner>` | any step failed, or the smoke test needed its retry | `result.txt`, and per attempt the console output, Chromium's stdout and stderr, the rendered screenshot, the profile logs (`cef.log`) and Crashpad dumps, plus Cairn and Chromium crash reports from `~/Library/Logs/DiagnosticReports` | 14 days |
-| `cairn-development-<runner>` | a green run | The ad-hoc DMG | 7 days |
+| `cairn-development-<runner>` | a green manual dispatch with `upload_development_artifacts=true` | The ad-hoc DMG | 7 days |
 | `chromium-status` | every maintenance run | `status.json` and `status.md` (and `update.*` when a pin update was proposed) | 14 days |
 | `release-logs-<arch>` | a Release build failed | The notarization verdicts and the packaging test logs | 14 days |
 | `release-<arch>`, `chromium-gate` | a Release build | The per-architecture build inputs and the gate record | 14 days |

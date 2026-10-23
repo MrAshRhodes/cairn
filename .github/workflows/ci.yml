@@ -7,6 +7,11 @@ on:
   # Also lets the Chromium maintenance workflow start CI for the pull request it opens: pushes made with the
   # default token do not trigger pull_request workflows.
   workflow_dispatch:
+    inputs:
+      upload_development_artifacts:
+        description: Retain unsigned development disk images as workflow artifacts
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
@@ -85,7 +90,9 @@ jobs:
         run: |
           scripts/bundle-app.sh
           scripts/make-dmg.sh
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - name: Upload development disk images
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.upload_development_artifacts }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: cairn-development-${{ matrix.runner }}
           path: dist/*.dmg
