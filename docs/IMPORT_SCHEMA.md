@@ -1,7 +1,10 @@
 # `cairn-import-v1`
 
-Cairn's own import format. Use it to bring data from a browser Cairn does not read directly: write a small converter
-that outputs this JSON, then choose the file in **File ▸ Import…**. Cairn never contacts a network and never imports
+Cairn's own import format. Use it for user-authored portable data or a converter's output, then choose the file in
+**File ▸ Import…**. For an ordinary bookmark HTML export, **Map an Export into Spaces…** provides a guided local mapping
+flow without writing JSON; it validates the mapped result through this same schema. See the
+[migration guide](features/import.md#guided-portable-workspace-migration-including-leaving-arc).
+Cairn never contacts a network and never imports
 passwords, cookies or extensions, whatever the file says.
 
 ```json

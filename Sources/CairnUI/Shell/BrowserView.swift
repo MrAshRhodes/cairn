@@ -82,9 +82,17 @@ struct BrowserView: View {
             .background(colorScheme == .dark ? Color(nsColor: .windowBackgroundColor) : Color(cairnHex: "#F3F2ED"))
         }
         .tint(accent)
-        .disabled(services.commandBarPresented)
-        .allowsHitTesting(!services.commandBarPresented)
-        .accessibilityHidden(services.commandBarPresented)
+        .disabled(services.commandBarPresented || model.closingTabID != nil || model.peek.isOpen)
+        .allowsHitTesting(!services.commandBarPresented && model.closingTabID == nil && !model.peek.isOpen)
+        .accessibilityHidden(services.commandBarPresented || model.closingTabID != nil || model.peek.isOpen)
+        .overlay {
+            if let id = model.peek.tabID {
+                PeekOverlay(services: services, tabID: id, ownerTabID: model.peek.ownerTabID)
+            }
+        }
+        .overlay {
+            if let id = model.closingTabID { PageCloseOverlay(model: model, tabID: id) }
+        }
         .overlay {
             if services.tabSwitcher.isPresented {
                 TabSwitcherView(switcher: services.tabSwitcher, model: model)
@@ -286,14 +294,7 @@ struct BrowserView: View {
                     Button("Try Again") { model.liveTab(for: id)?.reload(ignoringCache: false) }
                 }.padding(16).background(Color.orange.opacity(0.1))
             }
-            if let blocked = model.blockedPopups[id], blocked > 0 {
-                HStack {
-                    Image(systemName: "rectangle.on.rectangle.slash")
-                    Text(blocked == 1 ? "A popup was blocked" : "\(blocked) popups were blocked").font(.callout)
-                    Spacer()
-                    Button("Dismiss") { model.dismissBlockedPopups(id) }
-                }.padding(12).background(Color.yellow.opacity(0.12))
-            }
+            BlockedPopupBanner(model: model, tabID: id)
             if model.item(id)?.url == nil {
                 StartPage(services: services, tabID: id)
             } else {
@@ -302,7 +303,9 @@ struct BrowserView: View {
             }
         }
         .background(.background)
-        .overlay { TabPromptOverlay(model: model, tabID: id) }
+        .overlay {
+            if model.closingTabID != id { TabPromptOverlay(model: model, tabID: id) }
+        }
         .overlay(alignment: .bottomLeading) {
             if split && model.selectedTabID != id {
                 Button("Focus pane") { services.selectTab(id) }

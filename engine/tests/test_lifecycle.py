@@ -43,10 +43,13 @@ class LifecycleContractTests(unittest.TestCase):
 
     def test_late_download_destination_answer_does_not_own_cef_callback(self):
         source = (BRIDGE / "Handlers/CCDownloadHandler.mm").read_text()
-        decision = source.split("decide:^(NSString *path) {", 1)[1].split("}];", 1)[0]
+        before_download = source.split("bool OnBeforeDownload(", 1)[1].split("void OnDownloadUpdated(", 1)[0]
+        # Nested Objective-C messages may contain the same terminator; decide closes the final message.
+        decision = before_download.split("decide:^(NSString *path) {", 1)[1].rsplit("}];", 1)[0]
         self.assertIn("pendingChoices.find(identifier)", decision)
         self.assertIn("pendingChoices.erase(found)", decision)
         self.assertIn("!stopping", decision)
+        self.assertLess(decision.index("pendingChoices.erase(found)"), decision.index("pending->Continue("))
         release = source.split("void ReleaseDownloads()", 1)[1]
         self.assertIn("pendingChoices.clear()", release)
         self.assertIn("callback->Cancel()", release)
@@ -65,6 +68,37 @@ class LifecycleContractTests(unittest.TestCase):
     @unittest.skipUnless(platform.system() == "Darwin", "CEF wrapper test requires macOS")
     def test_browser_identity_survives_distinct_cef_callback_wrappers(self):
         self.run_native_fixture("browser_identity", link_wrapper=True)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "CEF close fixture requires macOS")
+    def test_close_approval_stay_invalidation_and_explicit_force(self):
+        self.run_native_fixture("close_lifecycle", link_wrapper=True)
+
+    def test_boot_registers_scripts_without_pausing_main_frame_requests(self):
+        resource = (BRIDGE / "Handlers/CCResourceRequestHandler.mm").read_text()
+        # An adopted popup's first request is already in flight; pausing it deadlocks Page.enable.
+        self.assertIn("if (type == RT_MAIN_FRAME) return RV_CONTINUE;", resource)
+        self.assertNotIn("RV_CONTINUE_ASYNC", resource)
+        tab = (BRIDGE / "CCTab.mm").read_text()
+        boot = tab.split("- (void)beginBoot {", 1)[1].split("- (void)settleBoot", 1)[0]
+        self.assertLess(boot.index("setScripts:self.configuredScripts"), boot.index("enablePage:0"))
+        enable = tab.split("- (void)enablePage:", 1)[1].split("- (void)publish ", 1)[0]
+        self.assertNotIn("setScripts:", enable)
+        scripts = tab.split("- (void)setScripts:", 1)[1].split("- (void)snapshot:", 1)[0]
+        self.assertNotIn("self.pageEnabled", scripts.split("NSUInteger generation", 1)[0])
+
+    def test_close_cannot_start_teardown_before_page_approval(self):
+        close = (BRIDGE / "CCTab+Closing.mm").read_text()
+        request = close.split("- (void)requestCloseWithCompletion:", 1)[1].split("- (void)cancelCloseRequest", 1)[0]
+        self.assertIn("CloseBrowser(false)", request)
+        self.assertNotIn("CloseBrowser(true)", request)
+        self.assertNotIn("self.closing = YES", request)
+        runtime = (BRIDGE / "CCRuntime.mm").read_text().split("+ (void)shutdown {", 1)[1]
+        self.assertLess(runtime.index("!pair.second->closeApproved"), runtime.index("stopping = true"))
+        life = (BRIDGE / "Handlers/CCLifeSpanHandler.mm").read_text()
+        do_close = life.split("bool DoClose(", 1)[1].split("void OnBeforeClose(", 1)[0]
+        self.assertIn("[tab approveClose]", do_close)
+        self.assertIn("CloseDevTools()", do_close)
+        self.assertIn("[native removeFromSuperview]", do_close)
 
     def run_native_fixture(self, name, link_wrapper=False):
         architecture = "arm64" if platform.machine() == "arm64" else "x86_64"

@@ -49,7 +49,7 @@ NSTimeInterval NavigationWatchdogSeconds() {
   return self;
 }
 - (void)dealloc {
-  if (_client && _client->browser && running) _client->browser->GetHost()->CloseBrowser(true);
+  if (_client && _client->browser && running) _client->browser->GetHost()->CloseBrowser(self.closing);
 }
 - (CefRefPtr<CefBrowser>)cefBrowser { return _client ? _client->browser : nullptr; }
 - (void)adoptClient { if (!_client) _client = new Client(self); }
@@ -120,6 +120,9 @@ NSTimeInterval NavigationWatchdogSeconds() {
   self.pageEnabled = NO;
   NSUInteger token = ++self.bootToken;
   self.scriptOperations++;
+  // Register before Page.enable. An adopted popup's first request is already in flight and must never wait
+  // for DevTools; the main-frame request is never paused, cancelled or replayed.
+  [self setScripts:self.configuredScripts];
   [self enablePage:0 token:token];
 }
 - (void)settleBoot {
@@ -135,7 +138,7 @@ NSTimeInterval NavigationWatchdogSeconds() {
       tab.pageEnabled = YES;
       [tab applyEmulation];
       [tab settleBoot];
-      [tab setScripts:tab.configuredScripts];
+      [tab drainNavigation];
       return;
     }
     if (attempt < 2) {
@@ -239,7 +242,11 @@ NSTimeInterval NavigationWatchdogSeconds() {
   [self armNavigationWatchdog];
   if (ignoringCache) _client->browser->ReloadIgnoreCache(); else _client->browser->Reload();
 }
-- (void)stop { self.pendingURL = nil; [self disarmNavigationWatchdog]; if (_client && _client->browser) _client->browser->StopLoad(); }
+- (void)stop {
+  self.pendingURL = nil;
+  [self disarmNavigationWatchdog];
+  if (_client && _client->browser) _client->browser->StopLoad();
+}
 - (double)zoom { return _zoom; }
 - (void)setZoom:(double)value {
   _zoom = std::isfinite(value) ? std::clamp(value, 0.25, 5.0) : 1.0;
@@ -313,7 +320,7 @@ NSTimeInterval NavigationWatchdogSeconds() {
 }
 - (void)setScripts:(NSArray<NSDictionary<NSString *,NSString *> *> *)scripts {
   self.configuredScripts = [scripts copy];
-  if (!_client || !_client->browser || !self.pageEnabled || self.closing) return;
+  if (!_client || !_client->browser || self.bootFailed || self.closing) return;
   NSUInteger generation = ++self.scriptGeneration;
   NSArray *oldIDs = [self.scriptIDs copy]; [self.scriptIDs removeAllObjects];
   self.scriptOperations += oldIDs.count + scripts.count;
@@ -360,12 +367,11 @@ NSTimeInterval NavigationWatchdogSeconds() {
   }];
 }
 - (void)close {
-  if (self.closing) return;
-  self.closing = YES;
-  cc::CancelPending(self);
+  [self requestCloseWithCompletion:^(BOOL) {}];
+}
+- (void)prepareApprovedClose {
   self.pendingURL = nil; ++_navigationToken;
   [self exitFullscreen];
   [self cancelReplies:@"Tab closed"];
-  if (_client && _client->browser) _client->browser->GetHost()->CloseBrowser(true);
 }
 @end

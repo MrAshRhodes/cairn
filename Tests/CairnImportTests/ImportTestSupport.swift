@@ -25,17 +25,32 @@ final class RecordingFileSystem: ImportFileSystem, @unchecked Sendable {
     private let lock = NSLock()
     private var log: [String] = []
     private let inner = LocalImportFileSystem()
-    var reads: [String] { lock.withLock { log.filter { $0.hasPrefix("read") || $0.hasPrefix("copy") } } }
+    var reads: [String] { lock.withLock { log.filter { $0.hasPrefix("read") || $0.hasPrefix("copy") || $0.hasPrefix("snapshot") } } }
     var all: [String] { lock.withLock { log } }
     private func record(_ entry: String) { lock.withLock { log.append(entry) } }
+    var failRemoval = false
+    var deniedNames: Set<String> = []
 
     func exists(_ url: URL) -> Bool { record("exists \(url.path)"); return inner.exists(url) }
     func isDirectory(_ url: URL) -> Bool { record("isDirectory \(url.path)"); return inner.isDirectory(url) }
-    func read(_ url: URL, maximumBytes: Int) throws -> Data { record("read \(url.path)"); return try inner.read(url, maximumBytes: maximumBytes) }
+    func read(_ url: URL, maximumBytes: Int) throws -> Data {
+        record("read \(url.path)")
+        if deniedNames.contains(url.lastPathComponent) { throw CocoaError(.fileReadNoPermission) }
+        return try inner.read(url, maximumBytes: maximumBytes)
+    }
     func makePrivateDirectory(_ url: URL) throws { record("mkdir \(url.path)"); try inner.makePrivateDirectory(url) }
     func copy(_ source: URL, to destination: URL) throws { record("copy \(source.path)"); try inner.copy(source, to: destination) }
-    func remove(_ url: URL) throws { record("remove \(url.path)"); try inner.remove(url) }
+    func remove(_ url: URL) throws {
+        record("remove \(url.path)")
+        if failRemoval { throw ImportError.unreadable("Synthetic cleanup failure") }
+        try inner.remove(url)
+    }
     func childDirectories(of url: URL) throws -> [URL] { record("list \(url.path)"); return try inner.childDirectories(of: url) }
+    func snapshotSQLite(_ source: URL, to destination: URL, maximumBytes: Int) throws {
+        record("snapshot \(source.path)")
+        if deniedNames.contains(source.lastPathComponent) { throw CocoaError(.fileReadNoPermission) }
+        try inner.snapshotSQLite(source, to: destination, maximumBytes: maximumBytes)
+    }
 }
 
 @MainActor
@@ -45,21 +60,30 @@ final class FakeSink: ImportSink {
     var committed: [SpaceCommit] = []
     var history: [ImportedHistoryEntry] = []
     var commitCalls = 0
+    var failCommit = false
     func existingPinKeys(inSpaceNamed name: String) -> Set<String>? { spaces[name] }
-    func commit(_ commits: [SpaceCommit]) throws {
+    func existingFolderPaths(inSpaceNamed name: String) -> Set<[String]> {
+        Set(committed.filter { $0.name == name }.flatMap(\.pins).flatMap { pin in
+            pin.folderPath.indices.map { Array(pin.folderPath.prefix($0 + 1)) }
+        })
+    }
+    func commit(_ commits: [SpaceCommit], history entries: [ImportedHistoryEntry]) throws -> Int {
         commitCalls += 1
+        if failCommit { throw ImportError.database("Synthetic commit failure") }
         for commit in commits {
             var keys = spaces[commit.name] ?? []
             for pin in commit.pins { keys.insert(ImportApplier.key(folderPath: pin.folderPath, url: pin.url)) }
             spaces[commit.name] = keys
             committed.append(commit)
         }
+        history += entries
+        return entries.count
     }
-    func newHistoryEntries(_ entries: [ImportedHistoryEntry]) throws -> [ImportedHistoryEntry] {
+    func selectHistory(_ entries: [ImportedHistoryEntry]) throws -> HistorySelection {
         let known = Set(history.map { "\($0.url)|\($0.lastVisit.timeIntervalSince1970)" })
-        return entries.filter { !known.contains("\($0.url)|\($0.lastVisit.timeIntervalSince1970)") }
+        let fresh = entries.filter { !known.contains("\($0.url)|\($0.lastVisit.timeIntervalSince1970)") }
+        return HistorySelection(entries: fresh, skipped: fresh.count == entries.count ? [:] : [.duplicate: entries.count - fresh.count])
     }
-    func recordHistory(_ entries: [ImportedHistoryEntry]) throws -> Int { history += entries; return entries.count }
 }
 
 /// Builds a Chromium-style History database (WAL mode) at test time. Rows live in the -wal file until the

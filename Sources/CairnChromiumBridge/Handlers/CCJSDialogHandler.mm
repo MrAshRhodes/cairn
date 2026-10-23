@@ -39,8 +39,11 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
   bool OnBeforeUnloadDialog(CefRefPtr<CefBrowser> browser, const CefString& message, bool isReload,
                             CefRefPtr<CefJSDialogCallback> callback) override {
     auto tab = owner;
-    if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser)) {
+    if (tab && SameBrowser(tab.cefBrowser, browser) && tab.closing) {
       callback->Continue(true, CefString()); return true;
+    }
+    if (!tab || stopping || !SameBrowser(tab.cefBrowser, browser)) {
+      callback->Continue(false, CefString()); return true;
     }
     return Forward(tab, @"beforeUnload", String(message), @"", @"", isReload, callback);
   }
@@ -63,12 +66,19 @@ class JSDialogHandler final : public TabHandler, public CefJSDialogHandler {
     // Without a UI the dialog is cancelled; never fall back to an app-modal CEF dialog.
     if (![tab.delegate conformsToProtocol:@protocol(CCChromiumTabJSDialogDelegate)]) {
       callback->Continue(false, CefString());
+      if ([type isEqualToString:@"beforeUnload"]) [tab cancelCloseRequest];
       return true;
     }
     NSString *requestID = [@"js" stringByAppendingString:NSUUID.UUID.UUIDString];
+    BOOL closeRequest = [type isEqualToString:@"beforeUnload"] && tab.closeDecision != nil;
+    NSUInteger generation = tab.closeGeneration;
+    __weak CCChromiumTab *weakTab = tab;
     Pending(tab)[requestID] = [^(NSDictionary *answer) {
       NSString *text = answer[@"text"];
-      callback->Continue([answer[@"accept"] boolValue], text ? CefString(text.UTF8String) : CefString());
+      BOOL accept = [answer[@"accept"] boolValue];
+      callback->Continue(accept, text ? CefString(text.UTF8String) : CefString());
+      CCChromiumTab *current = weakTab;
+      if (!accept && closeRequest && current.closeGeneration == generation) [current cancelCloseRequest];
     } copy];
     [(id<CCChromiumTabJSDialogDelegate>)tab.delegate chromiumTab:tab requestsJSDialog:requestID type:type
         message:message defaultText:defaultText origin:origin isReload:isReload];

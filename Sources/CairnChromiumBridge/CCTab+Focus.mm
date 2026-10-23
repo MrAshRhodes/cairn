@@ -10,16 +10,19 @@
   browser->GetHost()->SetFocus(true);
 }
 - (void)restoreContentFocus {
+  // Focusing right away (direct selection) keeps AppKit from later choosing the page's first focusable element as the
+  // initial responder of a window the live view was just moved into, which would reset the scroll position.
+  [self focusContentUnlessShellOwnsFocus];
   __weak CCChromiumTab *weakSelf = self;
-  dispatch_async(dispatch_get_main_queue(), ^{
-    CCChromiumTab *tab = weakSelf;
-    NSWindow *window = tab.view.window;
-    if (!window || ![tab cefBrowser]) return;
-    NSResponder *current = window.firstResponder;
-    NSView *view = [current isKindOfClass:NSView.class] ? (NSView *)current : nil;
-    // Switching tabs or panes returns focus to the page, but never steals it from a shell text field.
-    if (current == window || !current || [view isDescendantOf:tab.view]) [tab focusContent];
-  });
+  dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf focusContentUnlessShellOwnsFocus]; });
+}
+// Switching tabs or panes returns focus to the page, but never steals it from a shell text field.
+- (void)focusContentUnlessShellOwnsFocus {
+  NSWindow *window = self.view.window;
+  if (!window || ![self cefBrowser]) return;
+  NSResponder *current = window.firstResponder;
+  NSView *view = [current isKindOfClass:NSView.class] ? (NSView *)current : nil;
+  if (current == window || !current || [view isDescendantOf:self.view]) [self focusContent];
 }
 - (void)enableSpellChecking {
   auto browser = [self cefBrowser];

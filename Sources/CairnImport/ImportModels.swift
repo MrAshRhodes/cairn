@@ -23,7 +23,11 @@ public enum SkipReason: String, CaseIterable, Hashable, Sendable, Error {
     case unsupportedScheme = "Not a web address (javascript:, data:, about:, chrome:, file:…)"
     case invalidURL = "Invalid or over-long address"
     case hidden = "Hidden history rows"
+    case invalidDate = "Invalid history dates"
+    case unsupportedItem = "Unsupported bookmark items (separators, tags or omitted collections)"
     case duplicate = "Already present"
+    case olderVisit = "Older visits to the same address (latest visit kept)"
+    case userExcluded = "Excluded by your mapping"
     case overLimit = "Over the import size limit"
 }
 
@@ -42,7 +46,7 @@ public enum ImportError: LocalizedError, Equatable {
         case .tooLarge(let name): return "\(name) is larger than the import limit."
         case .malformed(let reason): return "The import file is not valid: \(reason)"
         case .unsupportedSource(let reason): return reason
-        case .database(let reason): return "History import: \(reason)"
+        case .database(let reason): return "Database import: \(reason)"
         }
     }
 }

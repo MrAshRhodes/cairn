@@ -11,18 +11,26 @@ public struct SpaceCommit: Sendable {
     public var folderCount: Int
 }
 
+public struct HistorySelection: Sendable {
+    public var entries: [ImportedHistoryEntry]
+    public var skipped: SkipCounts
+    public init(entries: [ImportedHistoryEntry], skipped: SkipCounts = [:]) {
+        self.entries = entries; self.skipped = skipped
+    }
+}
+
 /// Cairn's side of an import. `CairnUI` implements it over `BrowserModel` and `HistoryStore`; tests use fakes.
 @MainActor
 public protocol ImportSink {
     var supportsFolders: Bool { get }
     /// Keys (see `ImportApplier.key`) of pins already in the Space called `name`, or nil if there is no such Space.
     func existingPinKeys(inSpaceNamed name: String) -> Set<String>?
-    /// Adds all Spaces and pins atomically: either everything is added or nothing is.
-    func commit(_ spaces: [SpaceCommit]) throws
-    /// Entries not already in history.
-    func newHistoryEntries(_ entries: [ImportedHistoryEntry]) throws -> [ImportedHistoryEntry]
-    /// Adds the entries in one transaction and returns how many were stored.
-    func recordHistory(_ entries: [ImportedHistoryEntry]) throws -> Int
+    func existingFolderPaths(inSpaceNamed name: String) -> Set<[String]>
+    /// Validates the workspace, commits history in one transaction, then publishes the workspace.
+    /// A thrown error must leave both unchanged. Returns the number of history entries stored.
+    func commit(_ spaces: [SpaceCommit], history: [ImportedHistoryEntry]) throws -> Int
+    /// Entries not already in history which fit the destination without evicting existing visits.
+    func selectHistory(_ entries: [ImportedHistoryEntry]) throws -> HistorySelection
 }
 
 /// The dry run: exactly what `ImportApplier.apply` will add.
@@ -59,6 +67,7 @@ public enum ImportApplier {
             var seen = existing ?? []
             var pins: [ImportedBookmark] = []
             var folders = Set<[String]>()
+            let existingFolders = sink.existingFolderPaths(inSpaceNamed: planned.name)
             for var bookmark in planned.bookmarks {
                 bookmark.folderPath = Array(bookmark.folderPath.prefix(TabFolder.maximumDepth - 1))
                     + (bookmark.folderPath.count >= TabFolder.maximumDepth
@@ -68,7 +77,10 @@ public enum ImportApplier {
                     continue
                 }
                 if sink.supportsFolders {
-                    for depth in bookmark.folderPath.indices { folders.insert(Array(bookmark.folderPath.prefix(depth + 1))) }
+                    for depth in bookmark.folderPath.indices {
+                        let path = Array(bookmark.folderPath.prefix(depth + 1))
+                        if !existingFolders.contains(path) { folders.insert(path) }
+                    }
                 } else if !bookmark.folderPath.isEmpty {
                     bookmark.title = (bookmark.folderPath + [bookmark.title]).joined(separator: " / ")
                     bookmark.folderPath = []
@@ -80,10 +92,15 @@ public enum ImportApplier {
                                            isExisting: existing != nil, pins: pins, folderCount: folders.count))
             }
         }
-        let newHistory = try sink.newHistoryEntries(plan.history)
-        skipped[.duplicate, default: 0] += plan.history.count - newHistory.count
+        var historyKeys = Set<String>()
+        let uniqueHistory = plan.history.filter {
+            historyKeys.insert("\(Sanitizer.key($0.url))\u{1E}\($0.lastVisit.timeIntervalSince1970)").inserted
+        }
+        let selection = try sink.selectHistory(uniqueHistory)
+        skipped[.duplicate, default: 0] += plan.history.count - uniqueHistory.count
+        skipped.merge(selection.skipped, uniquingKeysWith: +)
         if skipped[.duplicate] == 0 { skipped[.duplicate] = nil }
-        return ImportPreview(spaces: commits, history: newHistory, skipped: skipped)
+        return ImportPreview(spaces: commits, history: selection.entries, skipped: skipped)
     }
 
     /// Applies a preview. Cancellation is honoured before anything is changed; after that the commit is atomic.
@@ -91,8 +108,7 @@ public enum ImportApplier {
     public static func apply(_ preview: ImportPreview, to sink: ImportSink,
                              isCancelled: () -> Bool = { Task.isCancelled }) throws -> ImportResult {
         if isCancelled() { throw CancellationError() }
-        try sink.commit(preview.spaces)
-        let added = preview.history.isEmpty ? 0 : try sink.recordHistory(preview.history)
+        let added = try sink.commit(preview.spaces, history: preview.history)
         return ImportResult(spacesTouched: preview.spaces.count, bookmarksAdded: preview.bookmarkCount,
                             foldersAdded: preview.folderCount, historyAdded: added, skipped: preview.skipped)
     }

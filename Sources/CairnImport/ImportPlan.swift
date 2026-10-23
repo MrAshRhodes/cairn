@@ -40,13 +40,51 @@ public struct ImportScanner: Sendable {
 
     /// Reads the consented source. Cancelling throws `CancellationError` and leaves nothing behind.
     public func scan(_ consent: ImportConsent) async throws -> ImportPlan {
-        staging.sweep()
+        try Task.checkCancellation()
+        try staging.sweep()
         let source = consent.source
         var skipped = SkipCounts()
         var spaces: [PlannedSpace] = []
         var history: [ImportedHistoryEntry] = []
         let defaultName = "Imported from \(source.browser)"
         switch source.format {
+        case .safariFolder, .safariBookmarks:
+            do {
+                if consent.options.bookmarks {
+                    let file = source.format == .safariBookmarks ? source.location : source.location.appendingPathComponent("Bookmarks.plist")
+                    let parsed = try SafariBookmarks.parse(try fileSystem.read(file, maximumBytes: ImportLimits.maximumFileBytes))
+                    spaces.append(PlannedSpace(name: defaultName, bookmarks: parsed.bookmarks))
+                    skipped.merge(parsed.skipped, uniquingKeysWith: +)
+                }
+                try Task.checkCancellation()
+                if consent.options.history {
+                    guard source.format == .safariFolder else {
+                        throw ImportError.unsupportedSource("A selected Bookmarks.plist contains no history.")
+                    }
+                    let parsed = try staging.withSQLiteSnapshot(named: "History.db", from: source.location) {
+                        try SafariHistory.read(databaseAt: $0)
+                    }
+                    history = parsed.entries
+                    skipped.merge(parsed.skipped, uniquingKeysWith: +)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw ImportError.unreadable("Safari data was not imported. \(error.localizedDescription) \(SafariBookmarks.accessGuidance)")
+            }
+        case .firefoxProfiles:
+            throw ImportError.unsupportedSource("Choose an individual Firefox profile folder, then confirm Read & Preview.")
+        case .firefoxProfile:
+            if consent.options.bookmarks || consent.options.history {
+                let parsed = try staging.withSQLiteSnapshot(named: "places.sqlite", from: source.location) {
+                    try FirefoxPlaces.read(databaseAt: $0, options: consent.options)
+                }
+                if consent.options.bookmarks {
+                    spaces.append(PlannedSpace(name: defaultName, bookmarks: parsed.bookmarks))
+                }
+                history = parsed.history
+                skipped = parsed.skipped
+            }
         case .chromiumProfile:
             if consent.options.bookmarks {
                 let file = source.location.appendingPathComponent("Bookmarks")

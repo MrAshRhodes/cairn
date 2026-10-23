@@ -38,6 +38,14 @@ public enum EngineDownloadState: Sendable, Equatable {
     }
 }
 
+/// The engine, never a URL-only downloader, decides whether the original transfer can be retried.
+public enum EngineDownloadRetry: Sendable, Equatable {
+    case available
+    case unavailable(String)
+
+    public static let missingContext: Self = .unavailable("The original download context is unavailable. Start the download again from its page.")
+}
+
 public struct EngineDownloadUpdate: Sendable, Equatable {
     public var id: UInt32
     public var state: EngineDownloadState
@@ -48,14 +56,19 @@ public struct EngineDownloadUpdate: Sendable, Equatable {
     public var percentComplete: Int
     public var bytesPerSecond: Int64
     public var path: String?
+    public var retry: EngineDownloadRetry
+    /// Incremented for each explicit retry. Late updates from older attempts must be ignored.
+    public var attempt: UInt32
     public init(id: UInt32, state: EngineDownloadState, receivedBytes: Int64 = 0, totalBytes: Int64 = -1,
-                percentComplete: Int = -1, bytesPerSecond: Int64 = 0, path: String? = nil) {
+                percentComplete: Int = -1, bytesPerSecond: Int64 = 0, path: String? = nil,
+                retry: EngineDownloadRetry = .missingContext, attempt: UInt32 = 0) {
         self.id = id; self.state = state; self.receivedBytes = receivedBytes; self.totalBytes = totalBytes
         self.percentComplete = percentComplete; self.bytesPerSecond = bytesPerSecond; self.path = path
+        self.retry = retry; self.attempt = attempt
     }
 }
 
-public enum EngineDownloadAction: Sendable { case pause, resume, cancel }
+public enum EngineDownloadAction: Sendable, Equatable { case pause, resume, cancel, retry(attempt: UInt32) }
 
 @MainActor
 public protocol EngineDownloadDelegate: AnyObject {

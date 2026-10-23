@@ -222,6 +222,13 @@ void FinishShutdown() {
 + (void)shutdown {
   NSAssert(NSThread.isMainThread, @"CEF must shut down on the main thread");
   if (!running || stopping) return;
+  for (const auto& pair : clients) {
+    if (!pair.second->closeApproved &&
+        !pair.second->browser->GetHost()->IsReadyToBeClosed()) {
+      NSLog(@"Cairn: refusing Chromium shutdown before every page has approved close.");
+      return;
+    }
+  }
   stopping = true;
   // Arm before any CEF calls: CloseBrowser/callback cancellation can also stop making progress.
   // Never call CefShutdown with live browsers or unresolved creations. A failed quit must not

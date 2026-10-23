@@ -19,9 +19,10 @@ public enum SiteOrigin {
     /// `scheme://host[:port]` in lowercase, or nil for anything that is not an http(s) origin.
     public static func normalize(_ value: String) -> String? {
         guard let components = URLComponents(string: value), let scheme = components.scheme?.lowercased(),
-              ["http", "https"].contains(scheme), let host = components.host?.lowercased(), !host.isEmpty else { return nil }
+              ["http", "https"].contains(scheme), let host = components.host?.lowercased(), !host.isEmpty,
+              !host.contains("*"), components.port.map({ (0...65_535).contains($0) }) ?? true else { return nil }
         let defaultPort = scheme == "https" ? 443 : 80
-        let hostText = host.contains(":") ? "[\(host)]" : host
+        let hostText = host.contains(":") && !host.hasPrefix("[") ? "[\(host)]" : host
         if let port = components.port, port != defaultPort { return "\(scheme)://\(hostText):\(port)" }
         return "\(scheme)://\(hostText)"
     }

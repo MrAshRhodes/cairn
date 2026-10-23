@@ -39,6 +39,14 @@ public final class BrowserModel: EngineTabDelegate {
     /// Fired after every mutation of `workspace`; persistence subscribes here.
     @ObservationIgnored public var onChange: (() -> Void)?
     @ObservationIgnored public var onNavigationCommitted: ((URL, String) -> Void)?
+    /// App-owned routing for eligible URL-only new-tab requests, never same-tab loads or adopted popups.
+    @ObservationIgnored public var newTabLinkDestination: ((URL) -> UUID?)?
+    @ObservationIgnored public var newTabLinkHandler: ((URL, Bool) -> Bool)?
+    @ObservationIgnored public var peekEnabled: (() -> Bool)?
+    public internal(set) var peek = PeekState()
+    public internal(set) var transientPages: [UUID: TransientPage] = [:]
+    @ObservationIgnored public var onQuickPageCreated: ((UUID, Bool) -> Void)?
+    @ObservationIgnored public var onTransientRemoved: ((TransientPage) -> Void)?
     @ObservationIgnored public var onError: ((Error) -> Void)?
     /// Page tools (see BrowserModel+PageTools.swift): a tab's host changed / its zoom changed.
     @ObservationIgnored public var onTabHostChanged: ((_ tabID: UUID, _ tab: EngineTab, _ url: URL) -> Void)?
@@ -46,8 +54,12 @@ public final class BrowserModel: EngineTabDelegate {
     public private(set) var errorMessage: String?
     /// Popups refused per tab (see BrowserModel+Popups.swift); shown until dismissed.
     public var blockedPopups: [UUID: Int] = [:]
+    public internal(set) var blockedPopupOrigins: [UUID: String] = [:]
+    public internal(set) var blockedPopupReasons: [UUID: PopupBlockReason] = [:]
+    public let popupExceptions = PopupExceptionStore()
     @ObservationIgnored var liveProfileIDs: [UUID: String] = [:]
     @ObservationIgnored var liveSpaceIDs: [UUID: UUID] = [:]
+    @ObservationIgnored var openerBoundTabIDs: Set<UUID> = []
     /// Prompts a page is waiting on and remembered site permissions; see BrowserModel+Permissions.swift.
     public let prompts = TabPromptCenter()
     public let sitePermissions = SitePermissionStore()
@@ -56,6 +68,11 @@ public final class BrowserModel: EngineTabDelegate {
     @ObservationIgnored var recoveryPolicies: [UUID: RecoveryPolicy] = [:]
     @ObservationIgnored var needsReload: Set<UUID> = []
     @ObservationIgnored var recoveryClock: () -> Date = { Date() }
+    public internal(set) var closingTabID: UUID?
+    public internal(set) var isClosingWorkspace = false
+    public internal(set) var isWorkspaceSuspended = false
+    @ObservationIgnored var closeRequests: [UUID: TabCloseRequest] = [:]
+    @ObservationIgnored var workspaceClose: WorkspaceCloseRequest?
     func liveProfileID(_ id: UUID) -> String? { liveProfileIDs[id] }
 
     public init(engine: BrowserEngine, workspace: Workspace = .makeDefault()) {
@@ -101,10 +118,13 @@ public final class BrowserModel: EngineTabDelegate {
     // MARK: Live engine tabs
     /// The engine tab for an item, created (and loaded) on first use.
     public func liveTab(for id: UUID) -> EngineTab? {
+        guard !isWorkspaceSuspended else { return nil }
+        if transientPages[id] != nil { return liveTabs[id] }
         guard let loc = locate(id), loc.list != .archive, let item = item(id) else { return nil }
         let space = workspace.spaces[loc.spaceIndex ?? selectedSpaceIndex]
         if let t = liveTabs[id], liveProfileIDs[id] == space.profileID { return t }
         unloadTab(id)
+        guard liveTabs[id] == nil else { return nil }
         // Factories must not start navigation before delegates, scripts and reverse lookup are ready.
         let t = engine.makeTab(configuration: EngineConfiguration(profileID: space.profileID), initialURL: nil)
         liveTabs[id] = t
@@ -120,18 +140,27 @@ public final class BrowserModel: EngineTabDelegate {
     }
 
     public func unloadTab(_ id: UUID) {
+        requestTabClose(id) { [weak self] approved in
+            if approved { self?.discardClosedTab(id) }
+        }
+    }
+
+    /// Only after CEF approval (or for an engine without cancellable close support).
+    func discardClosedTab(_ id: UUID) {
         let tab = liveTabs[id]
         cancelPrompts(for: id)
-        liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil; blockedPopups[id] = nil
+        liveTabs[id] = nil; tabStates[id] = nil; favicons[id] = nil; mediaStates[id] = nil
+        dismissBlockedPopups(id)
         tabHealth[id] = nil; recoveryPolicies[id] = nil; needsReload.remove(id)
         liveProfileIDs[id] = nil; liveSpaceIDs[id] = nil
+        openerBoundTabIDs.remove(id)
         tab?.delegate = nil
-        tab?.close()
+        discardTransientPresentation(id)
     }
 
     /// Re-applies `userScriptProvider` to every live tab (call after Boosts change).
     public func refreshUserScripts() {
-        for (id, t) in liveTabs { t.setUserScripts(userScriptProvider?(item(id)?.url) ?? []) }
+        for (id, t) in liveTabs { t.setUserScripts(userScriptProvider?(tabStates[id]?.url ?? item(id)?.url) ?? []) }
     }
 
     // MARK: Tabs
@@ -172,9 +201,17 @@ public final class BrowserModel: EngineTabDelegate {
 
     /// Closes a tab. Pinned tabs and favorites are only unloaded (they stay in the sidebar); other tabs are removed.
     public func closeTab(_ id: UUID) {
+        guard !isClosingWorkspace else { return }
+        requestTabClose(id) { [weak self] approved in
+            if approved { self?.commitTabClose(id) }
+        }
+    }
+
+    func commitTabClose(_ id: UUID) {
+        if transientPages[id] != nil { discardClosedTab(id); return }
         guard let loc = locate(id) else { return }
         if loc.list == .pinned || loc.list == .favorites {
-            unloadTab(id)
+            discardClosedTab(id)
             detachFromSplit(id)
             for s in workspace.spaces.indices where workspace.spaces[s].selectedTabID == id {
                 workspace.spaces[s].selectedTabID = nextSelectable(in: s, excluding: id)
@@ -182,12 +219,19 @@ public final class BrowserModel: EngineTabDelegate {
             changed()
             return
         }
-        removeTab(id)
+        commitTabRemoval(id)
     }
 
     public func removeTab(_ id: UUID) {
+        guard !isClosingWorkspace else { return }
+        requestTabClose(id) { [weak self] approved in
+            if approved { self?.commitTabRemoval(id) }
+        }
+    }
+
+    func commitTabRemoval(_ id: UUID) {
         guard let loc = locate(id) else { return }
-        unloadTab(id)
+        discardClosedTab(id)
         let removed = remove(at: loc)
         recordClosed(removed, at: loc)
         recentTabs.forget(id)
@@ -197,6 +241,7 @@ public final class BrowserModel: EngineTabDelegate {
     }
 
     public func moveTab(_ id: UUID, to list: TabList, in spaceID: UUID? = nil, at index: Int? = nil) {
+        guard !isClosingWorkspace else { return }
         guard let loc = locate(id), var moved = item(id) else { return }
         if list == .favorites, loc.list != .favorites, workspace.favorites.count >= Workspace.maximumFavorites {
             report(ServiceError.limit("Favorites hold at most \(Workspace.maximumFavorites) tabs. Remove one first."))
@@ -204,7 +249,14 @@ public final class BrowserModel: EngineTabDelegate {
         }
         let target = list == .favorites ? nil : (spaceIndex(spaceID) ?? loc.spaceIndex ?? selectedSpaceIndex)
         if list == .archive || target != loc.spaceIndex || (list == .favorites) != (loc.list == .favorites) {
-            unloadTab(id)
+            if liveTabs[id] != nil {
+                requestTabClose(id) { [weak self] approved in
+                    guard approved, let self else { return }
+                    self.discardClosedTab(id)
+                    self.moveTab(id, to: list, in: spaceID, at: index)
+                }
+                return
+            }
         }
         remove(at: loc)
         if list != .pinned || target != loc.spaceIndex || loc.list != .pinned { moved.folderID = nil }
@@ -236,7 +288,8 @@ public final class BrowserModel: EngineTabDelegate {
                 $0.id != workspace.spaces[s].selectedTabID && splitGroup(containing: $0.id) == nil
                     && now.timeIntervalSince($0.lastActiveAt) > interval
             }
-            for t in stale { unloadTab(t.id); moveTab(t.id, to: .archive, in: workspace.spaces[s].id) }
+            // Do not ask background pages to discard edits as part of a timer sweep.
+            for t in stale where liveTabs[t.id] == nil { moveTab(t.id, to: .archive, in: workspace.spaces[s].id) }
         }
     }
 
@@ -284,10 +337,19 @@ public final class BrowserModel: EngineTabDelegate {
 
     /// The last remaining Space cannot be removed.
     public func removeSpace(_ id: UUID) {
+        guard !isClosingWorkspace, workspace.spaces.count > 1, let s = spaceIndex(id) else { return }
+        let ids = (workspace.spaces[s].pinned + workspace.spaces[s].tabs + workspace.spaces[s].archive).map(\.id)
+            + liveSpaceIDs.compactMap { $0.value == id ? $0.key : nil }
+        requestCloseGroup(ids) { [weak self] approved in
+            if approved { self?.commitSpaceRemoval(id) }
+        }
+    }
+
+    private func commitSpaceRemoval(_ id: UUID) {
         guard workspace.spaces.count > 1, let s = spaceIndex(id) else { return }
         let space = workspace.spaces[s]
-        (space.pinned + space.tabs + space.archive).forEach { unloadTab($0.id) }
         workspace.spaces.remove(at: s)
+        popupExceptions.removeAll(spaceID: id)
         if workspace.selectedSpaceID == id {
             workspace.selectedSpaceID = workspace.spaces[0].id
         }
@@ -309,6 +371,7 @@ public final class BrowserModel: EngineTabDelegate {
         state.title = String(state.title.prefix(TabItem.maximumTitleLength))
         let previous = tabStates[id]
         tabStates[id] = state
+        if previous?.url != state.url { dismissBlockedPopups(id) }
         promptsTabStateChanged(id, previous: previous, state: state)
         let before = item(id)
         update(id) {
@@ -331,14 +394,18 @@ public final class BrowserModel: EngineTabDelegate {
     }
     public func engineTab(_ tab: EngineTab, requestsNewTab url: URL, activate: Bool) {
         guard let id = itemID(for: tab), let origin = liveSpaceIDs[id], spaceIndex(origin) != nil else { return }
-        newTab(url: url, in: origin, activate: activate)
+        if newTabLinkHandler?(url, activate) == true { return }
+        let destination = newTabLinkDestination?(url).flatMap { spaceIndex($0) != nil ? $0 : nil } ?? origin
+        newTab(url: url, in: destination, activate: activate)
     }
     public func engineTab(_ tab: EngineTab, requestsDownload url: URL, suggestedFilename: String?) {
         guard itemID(for: tab) != nil else { return }
         guard let downloadHandler else { report(ServiceError.invalidDownload("No download handler is configured.")); return }
         downloadHandler(url, suggestedFilename)
     }
-    public func engineTabDidRequestClose(_ tab: EngineTab) { if let id = itemID(for: tab) { closeTab(id) } }
+    public func engineTabDidRequestClose(_ tab: EngineTab) {
+        if let id = itemID(for: tab), !isClosingWorkspace { closeTab(id) }
+    }
 
     // MARK: Internals
     func changed() { repairReferences(); onChange?() }
@@ -371,6 +438,7 @@ public final class BrowserModel: EngineTabDelegate {
         for s in workspace.spaces.indices { repairFolders(in: s) }
         // A favorite is global metadata, not a global cookie jar. Recreate its live view on Space changes.
         for id in Array(liveTabs.keys) {
+            if transientPages[id] != nil { continue }
             guard let location = locate(id), location.list != .archive else { unloadTab(id); continue }
             let space = workspace.spaces[location.spaceIndex ?? selectedSpaceIndex]
             if liveProfileIDs[id] != space.profileID || liveSpaceIDs[id] != space.id { unloadTab(id) }

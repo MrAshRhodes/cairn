@@ -49,6 +49,11 @@ namespace cc { class Client; }
 @property(nonatomic, copy) NSString *profile;
 @property(nonatomic) BOOL ephemeral;
 @property(nonatomic) BOOL closing;
+@property(nonatomic, copy) void (^closeDecision)(BOOL);
+@property(nonatomic) NSUInteger closeGeneration;
+// Set when Stay answers beforeunload: CEF keeps ignoring CloseBrowser(false) until the renderer acknowledges it.
+@property(nonatomic) BOOL awaitingBeforeUnloadAck;
+@property(nonatomic) BOOL closeAckLost;
 @property(nonatomic) BOOL pageEnabled;
 @property(nonatomic) BOOL bootFailed;
 @property(nonatomic) NSUInteger bootToken;
@@ -84,12 +89,18 @@ namespace cc { class Client; }
 - (void)renderProcessTerminated:(NSString *)reason code:(NSInteger)code;
 - (void)renderProcessUnresponsive:(CefRefPtr<CefUnresponsiveProcessCallback>)callback;
 - (void)renderProcessResponsive;
+- (void)prepareApprovedClose;
 // The CEF browser, or null until CEF created it. Categories (CCTab+<Feature>.mm) cannot see the
 // tab's ivars, so they reach CEF through this.
 - (CefRefPtr<CefBrowser>)cefBrowser;
 // Popup adoption (CCTab+LifeSpan.mm): the client CEF is handed for a popup, created up front.
 - (void)adoptClient;
 - (CefRefPtr<cc::Client>)adoptedClient;
+@end
+
+@interface CCChromiumTab (ClosingInternal)
+- (void)approveClose;
+- (void)cancelCloseRequest;
 @end
 
 namespace cc {
@@ -121,6 +132,7 @@ void LoadTrackedOrigins(NSString *profile);
 void TrackOrigin(const std::string& contextKey, const CefString& url);
 // Drops live download callbacks; defined in Handlers/CCDownloadHandler.mm, called before CefShutdown.
 void ReleaseDownloads();
+void InvalidateDownloadRetries(int browserID);
 
 // One per browser. CEF sees a plain CefClient that hands out one small handler object per family.
 // Handlers are created in CCClient.mm and implemented in Handlers/. The public members are the
@@ -137,6 +149,7 @@ class Client final : public CefClient {
   bool creationPending = false;
   // The creation timed out; a browser that still appears is closed instead of attached.
   bool abandoned = false;
+  bool closeApproved = false;
   explicit Client(CCChromiumTab *tab);
 
   CefRefPtr<CefDevToolsMessageObserver> devToolsObserver() { return devTools_; }

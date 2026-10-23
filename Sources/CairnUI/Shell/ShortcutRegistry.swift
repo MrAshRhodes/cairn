@@ -191,12 +191,13 @@ public enum ShortcutCatalog {
 
     /// Every Arc shortcut row that has no Cairn feature; shown in docs and the shortcuts pane.
     public static let unmappedArcRows = [
-        "⌘N New window", "⇧⌘N Incognito window", "⌘⌥N Little Arc window", "⌘← / ⌘→ History (conflicts with text editing; use ⌘[ and ⌘])",
+        "⌘N New window", "⇧⌘N Incognito window", "⌘← / ⌘→ History (conflicts with text editing; use ⌘[ and ⌘])",
     ]
 
     public static let actions: [ShortcutAction] = {
         var list: [ShortcutAction] = [
             .init("ui.new-tab", "New Tab", .file, cairn: chord("t", "c"), symbol: "plus"),
+            .init("ui.quick-window", "New Quick Window", .file, cairn: chord("n", "co"), symbol: "macwindow"),
             .init("ui.command-bar", "Command Bar…", .file, cairn: chord("k", "c"), symbol: "command"),
             .init("ui.address", "Open Location…", .file, cairn: chord("l", "c"), symbol: "link"),
             .init("ui.close-tab", "Close Tab", .file, cairn: chord("w", "c"), symbol: "xmark"),

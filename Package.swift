@@ -37,7 +37,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "CairnEngineKit"),
-        .target(name: "CairnCore", dependencies: ["CairnEngineKit"]),
+        .target(name: "CairnCore", dependencies: ["CairnEngineKit"], resources: [.copy("Resources/PublicSuffix")]),
         .target(name: "CairnModules", dependencies: ["CairnCore", "CairnEngineKit"]),
         .target(name: "CairnBoosts", dependencies: ["CairnCore", "CairnEngineKit"]),
         .target(name: "CairnImport", dependencies: ["CairnCore"]),
@@ -54,7 +54,7 @@ let package = Package(
         ]),
         .executableTarget(name: "CairnHelper", cxxSettings: cppSettings, linkerSettings: cefLinkSettings),
         .executableTarget(name: "CairnChromiumSmoke",
-                          dependencies: ["CairnChromiumEngine", "CairnEngineKit"],
+                          dependencies: ["CairnChromiumEngine", "CairnEngineKit", "CairnBoosts"],
                           path: "engine/smoke"),
         .testTarget(name: "CairnCoreTests", dependencies: ["CairnCore", "CairnEngineKit"], exclude: ["Fixtures"]),
         .testTarget(name: "CairnModulesTests", dependencies: ["CairnModules", "CairnBoosts", "CairnCore", "CairnEngineKit"]),

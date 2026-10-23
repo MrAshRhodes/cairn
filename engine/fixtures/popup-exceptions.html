@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>popup exception opener</title>
+<h1>Exact-origin popup exceptions</h1>
+<p>Use only with the local smoke fixture server. Delayed attempts wait six seconds for the click's activation to expire.</p>
+<button id="delayed">Try delayed popup</button>
+<button id="flood">Try 20 delayed popups</button>
+<button id="reuse">Reuse named popup</button>
+<button id="close">Close named popup</button>
+<p id="origin"></p>
+<pre id="events"></pre>
+<script>
+const params = new URLSearchParams(location.search);
+window.log = [];
+window.win = null;
+document.getElementById('origin').textContent = location.origin;
+window.addEventListener('message', event => {
+  window.log.push({origin: event.origin, fromPopup: event.source === window.win, data: event.data});
+  document.getElementById('events').textContent = JSON.stringify(window.log, null, 2);
+});
+window.attemptPopup = (name = 'exception-popup') => {
+  window.win = window.open('/popup-exceptions.html?child=1', name);
+  return window.win !== null;
+};
+document.getElementById('delayed').onclick = () => setTimeout(() => attemptPopup(), 6000);
+document.getElementById('flood').onclick = () => setTimeout(() => {
+  for (let i = 0; i < 20; i++) window.open('/popup-exceptions.html?child=1', 'flood-' + i);
+}, 6000);
+document.getElementById('reuse').onclick = () => setTimeout(() => attemptPopup(), 6000);
+document.getElementById('close').onclick = () => window.win?.close();
+if (params.has('child')) {
+  document.title = 'popup exception child';
+  window.opener?.postMessage({hasOpener: true, name: window.name}, location.origin);
+}
+if (params.has('frame')) {
+  window.open('/popup-exceptions.html?child=1', 'frame-popup');
+}
+</script>

@@ -72,12 +72,18 @@ extension BrowserServices {
 
     /// True when the action can run now; menus use this to disable items.
     public func isEnabled(action id: String) -> Bool {
-        let hasTab = model.selectedTabID != nil
+        if activeTransientID != nil {
+            let supported: Set<String> = ["ui.quick-window", "ui.close-tab", "ui.close-window", "ui.address", "ui.command-bar",
+                                           "ui.reload", "ui.hard-reload", "ui.stop", "ui.back", "ui.forward",
+                                           "ui.zoom-in", "ui.zoom-out", "ui.zoom-reset", "ui.copy-url"]
+            guard supported.contains(id) else { return false }
+        }
+        let hasTab = activeTransientID != nil || model.selectedTabID != nil
         let panes = model.splitTabIDs.count
         switch id {
         case "ui.close-tab", "ui.reload", "ui.hard-reload", "ui.stop", "ui.find", "ui.find-next", "ui.find-previous",
              "ui.copy-url", "ui.copy-markdown-link":
-            return hasTab && (!id.hasPrefix("ui.copy") || model.selectedTab?.url != nil)
+            return hasTab && (!id.hasPrefix("ui.copy") || activeEngineTab?.state.url != nil || model.selectedTab?.url != nil)
         case "ui.zoom-in", "ui.zoom-out", "ui.zoom-reset": return activeEngineTab != nil
         case "ui.devtools", "ui.print", "ui.save-pdf": return activePageTools != nil
         case "ui.view-source": return model.viewSourceURLForSelectedTab != nil
@@ -102,7 +108,9 @@ extension BrowserServices {
     /// Runs a registered action. Unknown ids fall through to registered commands (modules, other features).
     public func perform(action id: String) {
         guard isEnabled(action: id) else { return }
+        if performTransientAction(id) { return }
         switch id {
+        case "ui.quick-window": newQuickWindow()
         case "ui.new-tab": showCommandBar(mode: .newTab)
         case "ui.command-bar": showCommandBar(mode: .search)
         case "ui.address": editAddress()

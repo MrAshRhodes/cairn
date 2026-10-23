@@ -16,11 +16,11 @@ public enum ChromiumEngineModule {
     }
 
     /// Test harnesses only: crashes the tab's renderer process to exercise crash recovery.
-    @MainActor public static func crashRendererForTesting(_ tab: EngineTab) {
-        (tab as? ChromiumTab)?.bridge.crashRendererForTesting()
+    @MainActor @discardableResult public static func crashRendererForTesting(_ tab: EngineTab) -> Bool {
+        (tab as? ChromiumTab)?.bridge.crashRendererForTesting() ?? false
     }
 
-    /// Invoke only after the app delegate's save/discard checks have approved quitting.
+    /// Invoke only after save/discard checks AND every live page's close decision approve quitting.
     @MainActor public static func prepareForTermination(completion: @escaping @MainActor () -> Void) {
         CCChromiumRuntime.shutdown {
             MainActor.assumeIsolated { completion() }

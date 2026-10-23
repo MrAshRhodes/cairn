@@ -82,6 +82,15 @@ import CairnCore
         #expect(sink.commitCalls == 0 && sink.spaces.isEmpty && sink.history.isEmpty)
     }
 
+    @Test func newPinsInExistingFoldersDoNotCountAsNewFolders() throws {
+        let sink = FakeSink()
+        let first = plan([PlannedSpace(name: "Imported from Firefox", bookmarks: [bookmark("A", "https://a.example/", ["F"])])])
+        _ = try ImportApplier.apply(ImportApplier.preview(first, sink: sink), to: sink)
+        let second = plan([PlannedSpace(name: "Imported from Firefox", bookmarks: [bookmark("B", "https://b.example/", ["F"])])])
+        let preview = try ImportApplier.preview(second, sink: sink)
+        #expect(preview.bookmarkCount == 1 && preview.folderCount == 0)
+    }
+
     @Test func cancelledScanThrowsCancellationAndCleansStaging() async throws {
         let scratch = try ImportScratch()
         try FileManager.default.createDirectory(at: scratch.file("Default"), withIntermediateDirectories: true)
@@ -107,7 +116,7 @@ import CairnCore
         #expect(mode == 0o700)
         #expect(try FileManager.default.contentsOfDirectory(atPath: directory.path) == ["History"])
         #expect(throws: ImportError.self) { try staging.stage(["Cookies"], from: scratch.file("Profile")) }
-        staging.sweep()
+        try staging.sweep()
         #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.file("Staging").path).isEmpty)
     }
 

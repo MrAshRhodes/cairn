@@ -42,12 +42,14 @@ public struct PopupBudget: Sendable {
 public enum PopupPolicy {
     /// The only decision point for page-initiated windows. `url` is the raw target (empty for `window.open('')`).
     public static func decide(url: String, disposition: PopupDisposition, userGesture: Bool,
-                              budget: inout PopupBudget, now: Date = Date()) -> PopupDecision {
+                              budget: inout PopupBudget, now: Date = Date(),
+                              allowsWithoutGesture: Bool = false) -> PopupDecision {
         guard disposition != .unsupported else { return .cancel }
-        guard userGesture else { return .block(.noUserGesture) }
         let blank = url.isEmpty || url.lowercased() == "about:blank"
         let scheme = blank ? "about" : URL(string: url)?.scheme?.lowercased()
-        guard let scheme, ["http", "https", "about"].contains(scheme) else { return .block(.unsupportedScheme) }
+        guard blank || scheme == "http" || scheme == "https" else { return .block(.unsupportedScheme) }
+        // An exception bypasses only the gesture requirement, never the scheme or abuse checks.
+        guard userGesture || allowsWithoutGesture else { return .block(.noUserGesture) }
         guard budget.consume(at: now) else { return .block(.rateLimited) }
         if disposition == .background, !blank { return .openInTab(activate: false) }
         return .adopt

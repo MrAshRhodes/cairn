@@ -47,8 +47,11 @@ extension DownloadsManager {
 
     public func applyEngineUpdate(_ update: EngineDownloadUpdate) {
         guard let id = engineItemIDs[update.id], let index = items.firstIndex(where: { $0.id == id }) else { return }
-        if update.state.isTerminal { engineItemIDs[update.id] = nil }
-        else if !items[index].status.isActive { return }
+        guard update.attempt == items[index].attempt,
+              items[index].status != .cancelled, items[index].status != .completed else { return }
+        if !update.state.isTerminal && !items[index].status.isActive { return }
+        if update.state == .completed || update.state == .cancelled { engineItemIDs[update.id] = nil }
+        let previousFailure = items[index].status == .failed ? items[index].errorMessage : nil
         items[index].receivedBytes = update.receivedBytes
         if update.totalBytes >= 0 { items[index].totalBytes = update.totalBytes }
         items[index].bytesPerSecond = update.state.isTerminal ? 0 : update.bytesPerSecond
@@ -70,18 +73,47 @@ extension DownloadsManager {
         case .failed(let message):
             items[index].status = .failed
             items[index].errorMessage = message
-            onError?(ServiceError.invalidDownload(message))
+            items[index].retry = update.retry
+            if previousFailure != message { onError?(ServiceError.invalidDownload(message)) }
         }
     }
 
     public func pause(_ id: UUID) { sendEngineAction(.pause, id) }
     public func resume(_ id: UUID) { sendEngineAction(.resume, id) }
 
+    /// Retries the retained engine transfer. Never falls back to the isolated pasted-link downloader.
+    public func retry(_ id: UUID) {
+        guard let index = items.firstIndex(where: { $0.id == id }),
+              items[index].status == .failed, items[index].retry == .available,
+              let engineID = items[index].engineID, let engineControl else { return }
+        do {
+            guard let destination = items[index].destination else {
+                throw ServiceError.invalidDownload("The destination is missing. Start the download again from its page.")
+            }
+            try Self.validateEngineDestination(destination)
+            guard FileManager.default.isWritableFile(atPath: destination.deletingLastPathComponent().path) else {
+                throw ServiceError.invalidDownload("The destination folder is no longer writable. Start the download again from its page.")
+            }
+            // Native code additionally verifies the original folder and partial-file identity immediately
+            // before resuming. It alone owns the partial; Cairn never deletes or replaces it to retry.
+            items[index].attempt += 1
+            items[index].status = .downloading
+            items[index].errorMessage = nil
+            items[index].bytesPerSecond = 0
+            engineControl(.retry(attempt: items[index].attempt), engineID)
+        } catch {
+            items[index].retry = .unavailable(error.localizedDescription)
+            onError?(error)
+        }
+    }
+
     func cancelEngineDownload(_ id: UUID, engineID: UInt32) {
-        guard let index = items.firstIndex(where: { $0.id == id }), items[index].status.isActive else { return }
-        engineControl?(.cancel, engineID)
+        guard let index = items.firstIndex(where: { $0.id == id }),
+              items[index].status.isActive || items[index].status == .failed else { return }
+        engineItemIDs[engineID] = nil
         items[index].status = .cancelled
         items[index].bytesPerSecond = 0
+        engineControl?(.cancel, engineID)
     }
 
     private func sendEngineAction(_ action: EngineDownloadAction, _ id: UUID) {

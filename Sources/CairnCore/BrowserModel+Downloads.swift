@@ -15,7 +15,7 @@ extension BrowserModel: EngineDownloadDelegate {
         engineDownloadUpdateHandler?(update)
     }
 
-    /// Pause, resume or cancel an engine download by its per-launch id.
+    /// Control or retry the original engine download by its per-launch id.
     public func performEngineDownloadAction(_ action: EngineDownloadAction, id: UInt32) {
         (engine as? EngineDownloadControlling)?.performDownloadAction(action, id: id)
     }

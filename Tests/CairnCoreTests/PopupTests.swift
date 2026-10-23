@@ -19,7 +19,7 @@ private final class PopupEngine: BrowserEngine {
 }
 
 @MainActor
-private final class PopupTab: EngineTab {
+private final class PopupTab: EngineTab, EngineTabCloseControlling {
     let id = UUID()
     let view = NSView()
     var state = EngineTabState()
@@ -27,7 +27,9 @@ private final class PopupTab: EngineTab {
     var zoom: Double = 1
     var scripts: [EngineUserScript] = []
     var closed = false
-    func load(_ url: URL) {}
+    var holdClose = false
+    var closeDecision: (@MainActor (Bool) -> Void)?
+    func load(_ url: URL) { state.url = url; delegate?.engineTab(self, didChange: state) }
     func goBack() {}
     func goForward() {}
     func reload(ignoringCache: Bool) {}
@@ -38,6 +40,17 @@ private final class PopupTab: EngineTab {
     func setUserScripts(_ scripts: [EngineUserScript]) { self.scripts = scripts }
     func takeSnapshot(completion: @escaping (NSImage?) -> Void) { completion(nil) }
     func close() { closed = true }
+    func requestClose(completion: @escaping @MainActor (Bool) -> Void) {
+        if holdClose { closeDecision = completion }
+        else { closed = true; completion(true) }
+    }
+    func forceClose() { answerClose(true) }
+    func answerClose(_ approved: Bool) {
+        let callback = closeDecision
+        closeDecision = nil
+        closed = approved
+        callback?(approved)
+    }
 }
 
 @Suite @MainActor struct PopupTests {
@@ -116,6 +129,125 @@ private final class PopupTab: EngineTab {
         model.unloadTab(id)
         #expect(model.blockedPopups[id] == nil)
     }
+
+    @Test func grantUsesTheBlockedInitiatorNotTheTargetOrSelectedSpace() throws {
+        let directory = try TestDirectory()
+        let (model, _, opener, space) = try makeModel()
+        try model.popupExceptions.load(from: directory.file("popups.json"))
+        let id = try #require(space.tabs.first?.id)
+        let source = URL(string: "https://opener.example/page")!
+        model.selectSpace(model.workspace.spaces[1].id)
+        model.engineTab(opener, blockedPopup: URL(string: "https://idp.example/auth"), reason: .noUserGesture, requestingURL: source)
+        #expect(model.blockedPopupOrigin(for: id) == "https://opener.example")
+        #expect(model.allowBlockedPopups(id))
+        #expect(model.popupExceptions.entries.first?.spaceID == space.id)
+        #expect(model.popupExceptions.entries.first?.profileID == space.profileID)
+        #expect(model.engineTab(opener, allowsPopupsFrom: source))
+        #expect(!model.engineTab(opener, allowsPopupsFrom: URL(string: "https://idp.example")!))
+        #expect(model.blockedPopups[id] == nil)
+        let otherID = model.newTab(url: source, in: model.workspace.spaces[1].id)
+        let otherTab = try #require(model.liveTab(for: otherID))
+        #expect(!model.engineTab(otherTab, allowsPopupsFrom: source))
+        #expect(model.popupExceptions.revoke(try #require(model.popupExceptions.entries.first).id))
+        #expect(!model.engineTab(opener, allowsPopupsFrom: source))
+    }
+
+    @Test func navigationChangesOriginImmediatelyAndClearsStaleConfirmation() throws {
+        let directory = try TestDirectory()
+        let (model, _, opener, space) = try makeModel()
+        try model.popupExceptions.load(from: directory.file("popups.json"))
+        let id = try #require(space.tabs.first?.id)
+        let source = URL(string: "https://opener.example/")!
+        model.engineTab(opener, blockedPopup: nil, reason: .noUserGesture, requestingURL: source)
+        let request = try #require(model.popupGrantRequest(for: id))
+        opener.load(URL(string: "https://other.example/")!)
+        #expect(model.blockedPopups[id] == nil)
+        #expect(!model.allowBlockedPopups(request))
+        #expect(model.popupExceptions.entries.isEmpty)
+        opener.load(source)
+        model.engineTab(opener, blockedPopup: nil, reason: .noUserGesture, requestingURL: source)
+        #expect(model.allowBlockedPopups(id))
+        opener.load(URL(string: "https://sub.opener.example/")!)
+        #expect(!model.engineTab(opener, allowsPopupsFrom: URL(string: "https://sub.opener.example/")!))
+        #expect(!model.engineTab(opener, allowsPopupsFrom: source))
+        opener.load(URL(string: "https://opener.example:444/")!)
+        #expect(!model.engineTab(opener, allowsPopupsFrom: URL(string: "https://opener.example:444/")!))
+        opener.load(source)
+        #expect(model.engineTab(opener, allowsPopupsFrom: source))
+    }
+
+    @Test func unknownOpaqueMismatchedAndNonGestureReasonsDoNotOfferAGrant() throws {
+        let (model, _, opener, space) = try makeModel()
+        let id = try #require(space.tabs.first?.id)
+        for requester in [nil, URL(string: "about:blank"), URL(string: "https://iframe.example/")] {
+            model.engineTab(opener, blockedPopup: nil, reason: .noUserGesture, requestingURL: requester)
+            #expect(model.blockedPopupOrigin(for: id) == nil)
+        }
+        for reason in [PopupBlockReason.rateLimited, .unsupportedScheme] {
+            model.engineTab(opener, blockedPopup: nil, reason: reason, requestingURL: URL(string: "https://opener.example/"))
+            #expect(model.blockedPopupOrigin(for: id) == nil)
+        }
+        #expect(!model.engineTab(PopupTab(), allowsPopupsFrom: URL(string: "https://opener.example/")!))
+    }
+
+    @Test func closingTabInvalidatesRequestButPreservesSpaceGrantUntilSpaceRemoval() throws {
+        let directory = try TestDirectory()
+        let (model, _, opener, space) = try makeModel()
+        let url = directory.file("popups.json")
+        try model.popupExceptions.load(from: url)
+        let source = URL(string: "https://opener.example/")!
+        let id = try #require(space.tabs.first?.id)
+        model.engineTab(opener, blockedPopup: nil, reason: .noUserGesture, requestingURL: source)
+        let request = try #require(model.popupGrantRequest(for: id))
+        #expect(model.allowBlockedPopups(request))
+        model.unloadTab(id)
+        #expect(!model.allowBlockedPopups(request))
+        #expect(!model.engineTab(opener, allowsPopupsFrom: source))
+        #expect(model.blockedPopupOrigins[id] == nil)
+        #expect(model.popupExceptions.entries.count == 1)
+        model.removeSpace(space.id)
+        #expect(model.popupExceptions.entries.isEmpty)
+        let reloaded = PopupExceptionStore()
+        try reloaded.load(from: url)
+        #expect(reloaded.entries.isEmpty)
+    }
+
+    @Test func cancellingSpaceRemovalPreservesGrantsAndLeaveRemovesThem() throws {
+        let directory = try TestDirectory()
+        let (model, _, opener, space) = try makeModel()
+        try model.popupExceptions.load(from: directory.file("popups.json"))
+        let tab = try #require(opener as? PopupTab)
+        tab.holdClose = true
+        let id = try #require(space.tabs.first?.id)
+        model.engineTab(opener, blockedPopup: nil, reason: .noUserGesture, requestingURL: opener.state.url)
+        #expect(model.allowBlockedPopups(id))
+        model.removeSpace(space.id)
+        #expect(model.popupExceptions.entries.count == 1)
+        tab.answerClose(false)
+        #expect(model.workspace.spaces.contains { $0.id == space.id })
+        #expect(model.engineTab(opener, allowsPopupsFrom: try #require(opener.state.url)))
+        model.removeSpace(space.id)
+        #expect(model.popupExceptions.entries.count == 1)
+        tab.answerClose(true)
+        #expect(!model.workspace.spaces.contains { $0.id == space.id })
+        #expect(model.popupExceptions.entries.isEmpty)
+    }
+
+    @Test func movingContextOrChangingProfileInvalidatesCapturedGrant() throws {
+        let directory = try TestDirectory()
+        let (model, _, opener, space) = try makeModel()
+        try model.popupExceptions.load(from: directory.file("popups.json"))
+        let id = try #require(space.tabs.first?.id)
+        model.engineTab(opener, blockedPopup: nil, reason: .noUserGesture, requestingURL: opener.state.url)
+        let request = try #require(model.popupGrantRequest(for: id))
+        model.liveSpaceIDs[id] = model.workspace.spaces[1].id
+        #expect(!model.allowBlockedPopups(request))
+        #expect(!model.engineTab(opener, allowsPopupsFrom: try #require(opener.state.url)))
+        model.liveSpaceIDs[id] = space.id
+        model.workspace.spaces[0].profileID = "replacement"
+        #expect(!model.allowBlockedPopups(request))
+        #expect(model.popupExceptions.entries.isEmpty)
+    }
 }
 
 @Suite struct PopupPolicyTests {
@@ -157,5 +289,27 @@ private final class PopupTab: EngineTab {
         for i in 0..<3 { #expect(decide("https://a.example/\(i)", budget: &budget, at: start) == .adopt) }
         #expect(decide("https://a.example/x", budget: &budget, at: start.addingTimeInterval(9)) == .block(.rateLimited))
         #expect(decide("https://a.example/x", budget: &budget, at: start.addingTimeInterval(10)) == .adopt)
+    }
+
+    @Test func exceptionBypassesOnlyGestureAndSharesTheExistingBudget() {
+        var budget = PopupBudget()
+        let now = Date(timeIntervalSince1970: 1000)
+        for target in ["https://example.com/auth", "", "about:blank"] {
+            #expect(PopupPolicy.decide(url: target, disposition: .foreground, userGesture: false,
+                                      budget: &budget, now: now, allowsWithoutGesture: true) == .adopt)
+        }
+        #expect(PopupPolicy.decide(url: "https://example.com", disposition: .foreground, userGesture: true,
+                                  budget: &budget, now: now) == .block(.rateLimited))
+        #expect(PopupPolicy.decide(url: "https://example.com", disposition: .foreground, userGesture: false,
+                                  budget: &budget, now: now.addingTimeInterval(10), allowsWithoutGesture: true) == .adopt)
+    }
+
+    @Test(arguments: ["javascript:alert(1)", "file:///x", "data:text/html,hi", "chrome://settings", "about:settings", "about:srcdoc"])
+    func exceptionDoesNotBypassUnsafeSchemeOrSpendBudget(_ target: String) {
+        var budget = PopupBudget(limit: 1)
+        #expect(PopupPolicy.decide(url: target, disposition: .foreground, userGesture: false,
+                                  budget: &budget, allowsWithoutGesture: true) == .block(.unsupportedScheme))
+        #expect(PopupPolicy.decide(url: "https://example.com", disposition: .foreground, userGesture: false,
+                                  budget: &budget, allowsWithoutGesture: true) == .adopt)
     }
 }

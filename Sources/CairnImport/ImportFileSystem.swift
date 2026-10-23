@@ -11,6 +11,8 @@ public protocol ImportFileSystem: Sendable {
     func copy(_ source: URL, to destination: URL) throws
     func remove(_ url: URL) throws
     func childDirectories(of url: URL) throws -> [URL]
+    /// A consistent SQLite backup, including committed WAL data, without opening the source for writing.
+    func snapshotSQLite(_ source: URL, to destination: URL, maximumBytes: Int) throws
 }
 
 public struct LocalImportFileSystem: ImportFileSystem {
@@ -58,5 +60,9 @@ public struct LocalImportFileSystem: ImportFileSystem {
         try FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]))
                 .map { $0.isDirectory == true && $0.isSymbolicLink != true } ?? false }
+    }
+
+    public func snapshotSQLite(_ source: URL, to destination: URL, maximumBytes: Int) throws {
+        try SQLiteSnapshot.create(from: source, to: destination, maximumBytes: maximumBytes)
     }
 }

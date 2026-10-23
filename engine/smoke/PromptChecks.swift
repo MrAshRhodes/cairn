@@ -14,6 +14,8 @@ import CairnChromiumEngine
     var dialogs: [EngineJSDialogRequest] = []
     var authRequests: [EngineAuthRequest] = []
     var certificateErrors: [EngineCertificateError] = []
+    var deferDialogs = false
+    var deferredDialogs: [(tab: EngineTab, request: EngineJSDialogRequest)] = []
 }
 
 extension Smoke: EngineTabPromptEvents {
@@ -25,9 +27,16 @@ extension Smoke: EngineTabPromptEvents {
     func engineTab(_ tab: EngineTab, requestsJSDialog request: EngineJSDialogRequest) {
         let harness = PromptHarness.shared
         harness.dialogs.append(request)
+        if harness.deferDialogs {
+            harness.deferredDialogs.append((tab, request))
+            return
+        }
         let answer = harness.dialog(request)
         (tab as? EngineTabPromptResponding)?.resolveJSDialog(id: request.id, accept: answer.accept, text: answer.text,
                                                               suppressFurther: answer.suppress)
+    }
+    func engineTab(_ tab: EngineTab, dismissesJSDialog requestID: String) {
+        PromptHarness.shared.deferredDialogs.removeAll { $0.tab === tab && $0.request.id == requestID }
     }
     func engineTab(_ tab: EngineTab, requestsAuthentication request: EngineAuthRequest) {
         let harness = PromptHarness.shared

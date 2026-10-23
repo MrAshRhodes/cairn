@@ -69,5 +69,8 @@ extension BrowserModel: EngineTabHealthEvents {
 
     public func dismissHealthNotice(_ id: UUID) { tabHealth[id] = nil }
 
-    func isVisibleTab(_ id: UUID) -> Bool { selectedTabID == id || splitTabIDs.contains(id) }
+    func isVisibleTab(_ id: UUID) -> Bool {
+        selectedTabID == id || splitTabIDs.contains(id)
+            || (transientPages[id] != nil && liveTabs[id]?.view.window?.isVisible == true)
+    }
 }

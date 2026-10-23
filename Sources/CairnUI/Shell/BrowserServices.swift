@@ -78,6 +78,10 @@ public final class BrowserServices {
     }
     @ObservationIgnored private var archiveTimer: Timer?
     @ObservationIgnored private var mediaKeys: MediaKeyController?
+    @ObservationIgnored private var didShutdown = false
+    @ObservationIgnored var quickWindows: [UUID: QuickWindowController] = [:]
+    /// Test/native harnesses may replace presentation, never profile selection or engine ownership.
+    @ObservationIgnored var presentQuickWindow: ((UUID, Bool) -> Void)?
 
     public init(model: BrowserModel, settings: Settings? = nil,
                 directory: URL = WorkspaceStore.defaultDirectory,
@@ -94,6 +98,11 @@ public final class BrowserServices {
         linkRules = LinkRuleStore(url: directory.appendingPathComponent("link-rules.json"))
         downloads = DownloadsManager()
         updater = UpdateController()
+        model.newTabLinkDestination = { [weak self] url in self?.routedLinkSpace(for: url) }
+        model.newTabLinkHandler = { [weak self] url, activate in self?.openRoutedQuickWindow(url, activate: activate) ?? false }
+        model.peekEnabled = { [weak self] in self?.linkRules.peekEnabled ?? false }
+        model.onQuickPageCreated = { [weak self] id, activate in self?.showQuickWindow(id, activate: activate) }
+        model.onTransientRemoved = { [weak self] page in self?.quickWindows.removeValue(forKey: page.id)?.finishClose() }
     }
 
     public static func bootstrap(registry suppliedRegistry: EngineRegistry? = nil,
@@ -171,6 +180,7 @@ public final class BrowserServices {
         model.sitePermissions.onError = { [weak self] error in self?.report("Site permissions could not be saved", error: error) }
         do { try model.sitePermissions.load(from: directory.appendingPathComponent("permissions.json")) }
         catch { report("Site permissions could not be loaded", detail: "\(error.localizedDescription)\nThe original file is preserved. Choices will not be remembered this session.") }
+        loadPopupExceptions()
         do { try boosts.load() }
         catch {
             boostsWritable = false
@@ -241,11 +251,26 @@ public final class BrowserServices {
     }
 
     public func shutdown() {
+        model.requestCloseAll { [weak self] approved in
+            if approved { self?.finishShutdown() }
+        }
+    }
+
+    private func finishShutdown() {
+        guard !didShutdown else { return }
+        didShutdown = true
         archiveTimer?.invalidate()
         archiveTimer = nil
         model.onChange = nil
         model.onNavigationCommitted = nil
         model.downloadHandler = nil
+        model.newTabLinkDestination = nil
+        model.newTabLinkHandler = nil
+        model.peekEnabled = nil
+        model.onQuickPageCreated = nil
+        model.onTransientRemoved = nil
+        for controller in quickWindows.values { controller.finishClose() }
+        quickWindows.removeAll()
         model.engineDownloadHandler = nil
         model.engineDownloadUpdateHandler = nil
         downloads.engineControl = nil
@@ -254,7 +279,6 @@ public final class BrowserServices {
         model.onTabZoomChanged = nil
         downloads.onError = nil
         modules.deactivate()
-        Array(model.liveTabs.keys).forEach { model.unloadTab($0) }
         model.engine.shutdown()
     }
 
@@ -266,7 +290,7 @@ public final class BrowserServices {
     public func dismissIssue(_ id: UUID) { issues.removeAll { $0.id == id } }
 
     public var activeEngineTab: EngineTab? {
-        model.selectedTabID.flatMap { model.liveTab(for: $0) }
+        (activeTransientID ?? model.selectedTabID).flatMap { model.liveTab(for: $0) }
     }
 
     public func focusAddress() {
@@ -281,6 +305,7 @@ public final class BrowserServices {
 
     public func closeTab() {
         if commandBarPresented { commandBarPresented = false; return }
+        if let id = activeTransientID { model.dismissTransient(id); return }
         guard let id = model.selectedTabID else { return }
         model.closeTab(id)
     }
@@ -359,6 +384,7 @@ public final class BrowserServices {
 
     public func commands() -> [Command] {
         var localBase: [Command] = [
+            .init(id: "ui.quick-window", title: "New Quick Window", symbol: "macwindow", perform: { [weak self] _ in self?.newQuickWindow() }),
             .init(id: "ui.new-tab", title: "New Tab", symbol: "plus", perform: { [weak self] _ in self?.showCommandBar(mode: .newTab) }),
             .init(id: "ui.new-blank-tab", title: "New Blank Tab", symbol: "plus.square", perform: { [weak self] _ in self?.newTab() }),
             .init(id: "ui.address", title: "Edit Address", symbol: "link", perform: { [weak self] _ in self?.editAddress() }),

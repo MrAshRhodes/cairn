@@ -1,0 +1,15 @@
+Public Suffix List (ICANN and PRIVATE sections)
+Upstream: https://publicsuffix.org/
+Repository: https://github.com/publicsuffix/list
+Revision: 8437e5262f13305f94087abe699b4fe2be1d1de8
+Revision date: 2026-10-22T08:36:29Z
+Retrieved: 2026-10-23
+SHA-256 (public_suffix_list.dat): d3e6243b51695327984abb3e2a5aa7077096867f75121e031e6a5a3840ca8bcd
+License: Mozilla Public License 2.0; see LICENSE in this directory.
+The upstream data and license are unmodified.
+
+Maintenance: refresh from upstream before each release (and when a site-classification
+bug is reported). Pin and review the upstream revision, replace the complete data and
+license, update the revision/date/hash here and in docs/features/links.md, then run
+scripts/swiftw test --filter 'SiteMatchingTests|LinkRoutingTests|LinkRoutingServicesTests'.
+Never download or refresh this resource during navigation or at application launch.

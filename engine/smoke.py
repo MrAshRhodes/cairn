@@ -19,6 +19,7 @@ import time
 import uuid
 
 from bundle import FRAMEWORK, HELPERS, bundle
+from download_retry_fixture import handle_download_retry
 from tool import ROOT
 
 
@@ -63,6 +64,7 @@ def minimal_pdf():
 
 class Fixture(http.server.BaseHTTPRequestHandler):
     icon_requests = []
+    popup_boost_requests = {}
 
     def attachment(self, name, length, status=200):
         self.send_response(status)
@@ -114,11 +116,22 @@ class Fixture(http.server.BaseHTTPRequestHandler):
 
     def do_POST(self):
         try:
+            if self.popup_boost_fixture("POST"):
+                return
+            if handle_download_retry(self, "POST"):
+                return
             self.do_download("POST")
         except (BrokenPipeError, ConnectionResetError):
             pass
 
     def do_GET(self):
+        try:
+            if self.popup_boost_fixture("GET"):
+                return
+            if handle_download_retry(self, "GET"):
+                return
+        except (BrokenPipeError, ConnectionResetError):
+            return
         if self.path == "/network-failure":
             self.close_connection = True
             return
@@ -141,6 +154,14 @@ class Fixture(http.server.BaseHTTPRequestHandler):
         elif route in ("/media.html", "/media-again.html"):
             body = (ROOT / "engine/fixtures/media.html").read_bytes()
             extra_headers["Set-Cookie"] = "fixture=1; Path=/"
+        elif route == "/playback-matrix.html":
+            body = (ROOT / "engine/fixtures/playback-matrix.html").read_bytes()
+        elif route == "/beforeunload.html":
+            body = (ROOT / "engine/fixtures/beforeunload.html").read_bytes()
+        elif route in ("/transient.html", "/oauth/transient.html"):
+            body = (ROOT / "engine/fixtures/transient.html").read_bytes()
+        elif route == "/popup-exceptions.html":
+            body = (ROOT / "engine/fixtures/popup-exceptions.html").read_bytes()
         elif route.startswith("/popups/"):
             body = (ROOT / "engine/fixtures/popups.html").read_bytes()
         elif route.startswith("/prompts/"):
@@ -169,6 +190,37 @@ class Fixture(http.server.BaseHTTPRequestHandler):
             self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
+
+    def popup_boost_fixture(self, method):
+        if not self.path.startswith("/popup-boost/"):
+            return False
+        if self.path == "/popup-boost/requests.json":
+            body = json.dumps(Fixture.popup_boost_requests).encode()
+            content_type = "application/json"
+        else:
+            key = method + " " + self.path
+            Fixture.popup_boost_requests[key] = Fixture.popup_boost_requests.get(key, 0) + 1
+            if self.path in ("/popup-boost/redirect", "/popup-boost/cross-redirect"):
+                target = "/popup-boost/landing?redirect"
+                if self.path.endswith("/cross-redirect"):
+                    target = f"http://localhost:{self.server.server_port}/popup-boost/landing?cross"
+                self.send_response(302)
+                self.send_header("Location", target)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return True
+            posted = self.rfile.read(int(self.headers.get("Content-Length", "0"))).decode()
+            body = (ROOT / "engine/fixtures/popup-boost.html").read_bytes()
+            body = body.replace(b"__METHOD__", json.dumps(method).encode())
+            body = body.replace(b"__POST_BODY__", json.dumps(posted).encode())
+            content_type = "text/html; charset=utf-8"
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+        return True
 
     def prompts_fixture(self):
         """Local pages for the permission, dialog and HTTP-auth checks (engine/smoke/PromptChecks.swift)."""

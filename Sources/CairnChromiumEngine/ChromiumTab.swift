@@ -12,7 +12,7 @@ import CairnChromiumBridge
 /// `CairnChromiumBridge.h` and adopted in the same extension file:
 /// `extension ChromiumTab: @preconcurrency CCChromiumTabAudioDelegate`.
 @MainActor
-final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDelegate {
+final class ChromiumTab: NSObject, EngineTab, EngineTabCloseControlling, @preconcurrency CCChromiumTabDelegate {
     let id = UUID()
     let profileID: String
     let bridge: CCChromiumTab
@@ -95,10 +95,21 @@ final class ChromiumTab: NSObject, EngineTab, @preconcurrency CCChromiumTabDeleg
     }
     func takeSnapshot(completion: @escaping (NSImage?) -> Void) { bridge.snapshot { completion($0) } }
     func close() {
-        guard !closed else { return }
+        requestClose { _ in }
+    }
+    func requestClose(completion: @escaping @MainActor (Bool) -> Void) {
+        guard !closed else { completion(true); return }
+        // Retain the Swift/bridge tab until CEF decides. Stay must leave its delegate and state intact.
+        bridge.requestClose { [self] approved in
+            MainActor.assumeIsolated {
+                if approved { closed = true }
+                completion(approved)
+            }
+        }
+    }
+    func forceClose() {
+        bridge.forceClose()
         closed = true
-        bridge.close()
-        bridge.delegate = nil
     }
 
     func chromiumTab(_ tab: CCChromiumTab, changed value: [String: Any]) {

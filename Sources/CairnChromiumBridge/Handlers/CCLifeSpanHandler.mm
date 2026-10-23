@@ -26,7 +26,12 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
   }
   bool DoClose(CefRefPtr<CefBrowser> b) override {
     auto tab = owner;
-    if (!tab.closing) [tab.delegate chromiumTabRequestsClose:tab];
+    BOOL requested = tab.closeDecision != nil || tab.closing;
+    // DoClose is irreversible: beforeunload has approved and unload has already run.
+    // Never hold it as a preflight while asking other tabs; finish native destruction promptly.
+    [tab approveClose];
+    b->GetHost()->CloseDevTools();
+    if (!requested) [tab.delegate chromiumTabRequestsClose:tab];
     // Closing a tab must not send performClose: to the containing browser window.
     NSView *native = (__bridge NSView *)b->GetHost()->GetWindowHandle();
     [native removeFromSuperview];
@@ -37,7 +42,7 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
     auto tab = owner;
     // An abandoned creation can finish after this tab has already started a replacement browser.
     if (tab && tab.adoptedClient.get() == &client_) {
-      tab.closing = YES;
+      [tab approveClose];
       CancelPending(tab);
       [tab cancelReplies:@"Tab closed"];
     }
@@ -51,7 +56,7 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
     // Never call CefShutdown from inside a CEF callback stack.
     if (stopping && clients.empty()) dispatch_async(dispatch_get_main_queue(), ^{ FinishShutdown(); });
   }
-  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame>, int popupID,
+  bool OnBeforePopup(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame, int popupID,
                      const CefString& url, const CefString&, WindowOpenDisposition disposition,
                      bool gesture, const CefPopupFeatures&, CefWindowInfo& window, CefRefPtr<CefClient>& client,
                      CefBrowserSettings&, CefRefPtr<CefDictionaryValue>&, bool*) override {
@@ -60,7 +65,9 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
     }
     auto tab = owner;
     id<CCChromiumTabLifeSpanDelegate> host = (id)tab.delegate;
-    if (stopping || tab.closing || ![host respondsToSelector:@selector(chromiumTab:hostsPopup:disposition:userGesture:)])
+    bool scoped = [host respondsToSelector:@selector(chromiumTab:hostsPopup:disposition:userGesture:requestingURL:)];
+    if (stopping || tab.closing ||
+        (!scoped && ![host respondsToSelector:@selector(chromiumTab:hostsPopup:disposition:userGesture:)]))
       return true;
     CCPopupDisposition kind = CCPopupDispositionUnsupported;
     switch (disposition) {
@@ -69,7 +76,10 @@ class LifeSpanHandler final : public TabHandler, public CefLifeSpanHandler {
       case CEF_WOD_NEW_BACKGROUND_TAB: kind = CCPopupDispositionBackground; break;
       default: break;
     }
-    CCChromiumTab *popup = [host chromiumTab:tab hostsPopup:String(url) disposition:kind userGesture:gesture];
+    CCChromiumTab *popup = scoped
+        ? [host chromiumTab:tab hostsPopup:String(url) disposition:kind userGesture:gesture
+              requestingURL:frame && frame->IsMain() ? String(frame->GetURL()) : @""]
+        : [host chromiumTab:tab hostsPopup:String(url) disposition:kind userGesture:gesture];
     if (!popup) return true;
     CefRefPtr<Client> popupClient = popup.adoptedClient;
     if (!popupClient) return true;

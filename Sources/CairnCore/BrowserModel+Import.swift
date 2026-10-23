@@ -24,7 +24,7 @@ extension BrowserModel {
 
     /// Adds imported pins (never live tabs) to new or existing Spaces. All-or-nothing: if the result would be
     /// invalid the workspace is left untouched and the error is thrown. New Spaces get their own storage profile.
-    public func importSpaces(_ imports: [SpaceImport]) throws {
+    public func importSpaces(_ imports: [SpaceImport], beforePublishing: () throws -> Void = {}) throws {
         var draft = workspace
         var created: [UUID] = []
         for item in imports {
@@ -58,6 +58,8 @@ extension BrowserModel {
             }
         }
         try draft.validate()
+        try beforePublishing()
+        guard !imports.isEmpty else { return }
         workspace = draft
         if let first = created.first { selectSpace(first) } else { changed() }
     }

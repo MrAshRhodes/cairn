@@ -30,7 +30,7 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
     return resource_;
   }
   bool OnBeforeBrowse(CefRefPtr<CefBrowser> browser, CefRefPtr<CefFrame> frame, CefRefPtr<CefRequest> request,
-                      bool, bool) override {
+                      bool userGesture, bool isRedirect) override {
     auto tab = owner;
     if (!tab || tab.closing || stopping || !SameBrowser(tab.cefBrowser, browser)) return true;
     NSString *url = String(request->GetURL());
@@ -42,6 +42,16 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
       return true;
     }
     if (frame && frame->IsMain()) {
+      // Never reconstruct a form, redirect, script navigation or opener-dependent popup as a URL.
+      // Returning true is the sole cancellation point; the source document remains untouched.
+      const auto transition = request->GetTransitionType();
+      if (userGesture && !isRedirect && (transition & TT_SOURCE_MASK) == TT_LINK &&
+          !(transition & (TT_CLIENT_REDIRECT_FLAG | TT_SERVER_REDIRECT_FLAG)) &&
+          request->GetMethod() == "GET" && !request->GetPostData() &&
+          [tab.delegate conformsToProtocol:@protocol(CCChromiumTabNavigationDelegate)] &&
+          [(id<CCChromiumTabNavigationDelegate>)tab.delegate chromiumTab:tab interceptUserNavigation:url]) {
+        return true;
+      }
       ++navigationGeneration_;
       CancelPending(tab);
     }
@@ -117,6 +127,10 @@ class RequestHandler final : public TabHandler, public CefRequestHandler {
     ++navigationGeneration_;
     auto tab = owner;
     if (!tab || !SameBrowser(tab.cefBrowser, browser)) return;
+    if (tab.closeDecision || tab.awaitingBeforeUnloadAck) {
+      tab.closeAckLost = YES;
+      tab.awaitingBeforeUnloadAck = YES;
+    }
     CancelPending(tab);
     NSString *reason;
     switch (status) {

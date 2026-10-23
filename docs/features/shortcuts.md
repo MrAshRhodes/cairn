@@ -52,5 +52,6 @@ new action is left unbound. Fixed system shortcuts still take priority.
 
 ## Arc shortcuts Cairn does not implement
 
-- ⌘N New window, ⇧⌘N Incognito window, ⌥⌘N Little Arc window: Cairn has a single window and no incognito mode.
+- ⌘N New window, ⇧⌘N Incognito window: multiple full workspace windows and incognito mode are not implemented.
+- ⌥⌘N opens **New Quick Window**, a remappable command in both keymaps. It uses the selected Space's normal profile, not private storage; see [Link destinations](links.md).
 - ⌘← / ⌘→ for history: this conflicts with text editing. Use ⌘[ and ⌘].

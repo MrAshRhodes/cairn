@@ -24,6 +24,7 @@ public struct ImportStaging: Sendable {
                 guard allowed.contains(name), !name.contains("/") else {
                     throw ImportError.unsupportedSource("\(name) is not an importable file.")
                 }
+
                 let file = source.appendingPathComponent(name)
                 if fileSystem.exists(file) { try fileSystem.copy(file, to: directory.appendingPathComponent(name)) }
             }
@@ -34,14 +35,40 @@ public struct ImportStaging: Sendable {
         return directory
     }
 
+    /// Runs a reader against one private, consistent database snapshot and removes it on every outcome.
+    public func withSQLiteSnapshot<T>(named name: String, from source: URL,
+                                      read: (URL) throws -> T) throws -> T {
+        guard ["places.sqlite", "History", "History.db"].contains(name) else {
+            throw ImportError.unsupportedSource("\(name) is not an importable database.")
+        }
+        let directory = root.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        do {
+            try fileSystem.makePrivateDirectory(directory)
+            let destination = directory.appendingPathComponent(name)
+            try fileSystem.snapshotSQLite(source.appendingPathComponent(name), to: destination,
+                                          maximumBytes: ImportLimits.maximumFileBytes)
+            let result = try read(destination)
+            try fileSystem.remove(directory)
+            return result
+        } catch {
+            let original = error
+            do { try fileSystem.remove(directory) }
+            catch {
+                throw ImportError.unreadable("Private import data could not be removed: \(error.localizedDescription). Original error: \(original.localizedDescription)")
+            }
+            throw original
+        }
+    }
+
     public func discard(_ directory: URL) {
         guard directory.deletingLastPathComponent().standardizedFileURL.path == root.standardizedFileURL.path else { return }
         try? fileSystem.remove(directory)
     }
 
     /// Removes anything a crashed or killed import left behind.
-    public func sweep() {
-        guard let leftovers = try? fileSystem.childDirectories(of: root) else { return }
-        for directory in leftovers { try? fileSystem.remove(directory) }
+    public func sweep() throws {
+        guard fileSystem.exists(root) else { return }
+        let leftovers = try fileSystem.childDirectories(of: root)
+        for directory in leftovers { try fileSystem.remove(directory) }
     }
 }

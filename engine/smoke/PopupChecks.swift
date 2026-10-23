@@ -4,6 +4,7 @@ import CairnEngineKit
 extension Smoke: EngineTabPopupEvents {
     func engineTab(_ tab: EngineTab, hostsPopup popup: EngineTab, activate: Bool) -> Bool {
         popup.delegate = self
+        popup.setUserScripts(popupScripts[tab.id] ?? [])
         let window = NSWindow(contentRect: NSRect(x: 40, y: 40, width: 640, height: 480),
                               styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.isReleasedWhenClosed = false

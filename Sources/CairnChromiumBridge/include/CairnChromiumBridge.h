@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import "CCNavigation.h"
 
 NS_ASSUME_NONNULL_BEGIN
 
@@ -81,8 +82,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 // [Download]
 // Downloads outlive tabs, so they are reported to a process-wide delegate instead of a tab delegate.
-// info: id, url, suggestedName, mime, totalBytes, profile, ephemeral.
-// update: id, complete, canceled, interrupted, paused, reason, received, total, percent, speed, path.
+// info: id (process-wide, not Chromium's profile-local ID), url, suggestedName, mime, totalBytes, profile, ephemeral.
+// update: id, complete, canceled, interrupted, paused, reason, received, total, percent, speed, path,
+// attempt (explicit retry generation), retryable, retryReason.
 @protocol CCChromiumDownloadDelegate <NSObject>
 - (void)chromiumDownloadWillStart:(NSDictionary<NSString *, id> *)info
                            decide:(void (^)(NSString *_Nullable path))decide;
@@ -91,6 +93,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface CCChromiumDownloads : NSObject
 @property(class, nonatomic, weak, nullable) id<CCChromiumDownloadDelegate> delegate;
++ (void)retry:(uint32_t)identifier attempt:(uint32_t)attempt;
 + (void)cancel:(uint32_t)identifier;
 + (void)pause:(uint32_t)identifier;
 + (void)resume:(uint32_t)identifier;
@@ -132,6 +135,13 @@ NS_ASSUME_NONNULL_BEGIN
 // [Keyboard]
 
 // [LifeSpan]
+@interface CCChromiumTab (Closing)
+// Completion is exactly once: NO on Stay/invalidation, YES once close is irreversible.
+- (void)requestCloseWithCompletion:(void (^)(BOOL approved))completion NS_SWIFT_NAME(requestClose(completion:));
+// Explicit user override only. Resolves an existing request, if any, as approved.
+- (void)forceClose;
+@end
+
 typedef NS_ENUM(NSInteger, CCPopupDisposition) {
   CCPopupDispositionForeground,
   CCPopupDispositionBackground,
@@ -143,6 +153,11 @@ typedef NS_ENUM(NSInteger, CCPopupDisposition) {
 // (created with -initAdoptingPopupFromTab:), or nil to cancel the popup.
 - (nullable CCChromiumTab *)chromiumTab:(CCChromiumTab *)tab hostsPopup:(NSString *)url
                             disposition:(CCPopupDisposition)disposition userGesture:(BOOL)userGesture;
+@optional
+// Main-frame initiator URL from CEF; empty for subframes and unknown/opaque initiators.
+- (nullable CCChromiumTab *)chromiumTab:(CCChromiumTab *)tab hostsPopup:(NSString *)url
+                            disposition:(CCPopupDisposition)disposition userGesture:(BOOL)userGesture
+                          requestingURL:(NSString *)requestingURL;
 @end
 
 @interface CCChromiumTab (LifeSpan)
@@ -226,7 +241,7 @@ typedef NS_ENUM(NSInteger, CCPopupDisposition) {
 // [Testing]
 // Test harnesses only: crashes this tab's renderer to exercise recovery.
 @interface CCChromiumTab (Testing)
-- (void)crashRendererForTesting;
+- (BOOL)crashRendererForTesting;
 @end
 
 NS_ASSUME_NONNULL_END

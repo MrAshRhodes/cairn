@@ -64,9 +64,10 @@ import CairnModules
             "ui.reload": "⌘R", "ui.find": "⌘F", "ui.split": "⇧⌘D", "ui.split-add-right": "⌃⇧+", "ui.split-remove-pane": "⌃⇧-",
             "ui.recent-tabs": "⌃⇥", "ui.next-space": "⌥⌘→", "ui.previous-space": "⌥⌘←", "ui.next-tab": "⌥⌘↓", "ui.previous-tab": "⌥⌘↑",
             "ui.select-tab-1": "⌘1", "ui.select-tab-9": "⌘9", "ui.select-space-1": "⌃1", "ui.split-focus-1": "⌃⇧1",
+            "ui.quick-window": "⌥⌘N",
         ]
         for (id, display) in expected { #expect(map.chord(for: id)?.display == display, "\(id)") }
-        #expect(ShortcutCatalog.unmappedArcRows.count == 4)
+        #expect(ShortcutCatalog.unmappedArcRows.count == 3)
     }
 
     @Test func everyDefaultActionHasAnIdTheServicesCanRun() {

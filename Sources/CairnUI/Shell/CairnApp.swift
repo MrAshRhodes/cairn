@@ -22,6 +22,9 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     private var window: NSWindow?
     private var pendingURLs: [URL] = []
     private let termination: ApplicationTerminationCoordinator
+    private var windowClosePending = false
+    private var allowWindowClose = false
+    private var forcePageClose = false
 
     init(prepareForTermination: CairnApp.TerminationPreparation? = nil) {
         termination = ApplicationTerminationCoordinator(prepare: prepareForTermination)
@@ -38,6 +41,7 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
                 styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                 backing: .buffered, defer: false)
             window.title = "Cairn"
+            window.identifier = NSUserInterfaceItemIdentifier("CairnMainWindow")
             window.titleVisibility = .hidden
             window.titlebarAppearsTransparent = true
             window.minSize = NSSize(width: 780, height: 500)
@@ -63,33 +67,73 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func application(_ application: NSApplication, open urls: [URL]) {
         if let services {
+            services.model.resumeWorkspace()
             urls.forEach { services.openExternalLink($0) }
-            window?.makeKeyAndOrderFront(nil)
+            if services.activeQuickWindowID == nil { showWindow() }
         } else { pendingURLs.append(contentsOf: urls) }
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        window?.makeKeyAndOrderFront(nil)
+        showWindow()
         return true
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        termination.request(approval: { self.approveTermination() }) { [weak sender] approved in
+        // A window-close decision must not race a quit into tearing down a vetoed workspace.
+        guard !windowClosePending else { return .terminateCancel }
+        window?.makeKeyAndOrderFront(nil)
+        let force = forcePageClose
+        return termination.request(approval: { self.approveUnsavedBoosts() }, pageApproval: { decide in
+            guard let services = self.services else { decide(true); return }
+            services.requestPageCloseApproval(force: force, completion: decide)
+        }, commitApproval: {
+            self.approvePersistence()
+        }, failed: {
+            self.services?.report("Cairn could not finish quitting",
+                                  detail: "Chromium did not finish approved teardown. The quit was not reported as successful.")
+        }) { [weak self, weak sender] approved in
+            self?.forcePageClose = false
+            if !approved { self?.services?.model.resumeWorkspace() }
             sender?.reply(toApplicationShouldTerminate: approved)
         }
     }
 
-    private func approveTermination() -> Bool {
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if allowWindowClose { return true }
+        guard !windowClosePending, !termination.isInProgress, services?.model.isClosingWorkspace != true else { return false }
+        guard approveUnsavedBoosts() else { return false }
+        windowClosePending = true
+        services?.requestPageCloseApproval { [weak self, weak sender] approved in
+            guard let self else { return }
+            self.windowClosePending = false
+            guard approved, self.approvePersistence() else {
+                self.services?.model.resumeWorkspace()
+                return
+            }
+            self.allowWindowClose = true
+            sender?.close()
+            self.allowWindowClose = false
+        }
+        if services == nil { windowClosePending = false; return true }
+        return false
+    }
+
+    private func approveUnsavedBoosts() -> Bool {
         if services?.hasUnsavedBoostChanges == true {
             let alert = NSAlert()
             alert.messageText = "A Boost has unsaved changes"
-            alert.informativeText = "Keep Cairn open to save your changes, or discard them and quit."
+            alert.informativeText = "Keep Cairn open to save your changes, or discard them and close."
             alert.addButton(withTitle: "Keep Editing")
-            alert.addButton(withTitle: "Discard & Quit")
+            alert.addButton(withTitle: "Discard & Close")
             if alert.runModal() == .alertFirstButtonReturn { return false }
+            services?.hasUnsavedBoostChanges = false
         }
+        return true
+    }
+
+    private func approvePersistence() -> Bool {
         do { try services?.flush() }
         catch {
             let alert = NSAlert()
@@ -137,6 +181,7 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         item(app, "Show All", #selector(NSApplication.unhideAllApplications(_:)), target: NSApp)
         app.addItem(.separator())
         item(app, "Quit Cairn", #selector(NSApplication.terminate(_:)), "q", target: NSApp)
+        item(app, "Force Close Pages and Quit…", #selector(forceQuitPages))
         func adopt(_ kind: ShortcutMenu, into main: NSMenu, before: NSMenu? = nil) -> NSMenu {
             let built = MenuBuilder.menu(kind, map: shortcutMap, target: self, action: #selector(performShortcutAction(_:)))
             let holder = NSMenuItem(title: kind.rawValue, action: nil, keyEquivalent: "")
@@ -165,6 +210,7 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         item(window, "Zoom", #selector(NSWindow.performZoom(_:)))
         window.items.last?.target = nil
         item(window, "Show Browser", #selector(showWindow))
+        item(window, "Force Close Tab…", #selector(forceCloseCurrentTab))
         NSApp.windowsMenu = window
         let help = menu("Help")
         item(help, "Cairn Keyboard Shortcuts", #selector(showShortcuts))
@@ -176,22 +222,51 @@ final class CairnApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     @objc private func performShortcutAction(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, let services else { return }
+        if services.activeQuickWindowID != nil { services.perform(action: id); return }
         if id == "ui.close-window" { window?.performClose(nil); return }
-        if id != "ui.close-tab" { showWindow() }
+        if id != "ui.close-tab" && id != "ui.quick-window" { showWindow() }
         services.perform(action: id)
     }
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         guard let services else { return false }
         if let id = menuItem.representedObject as? String {
-            if window?.attachedSheet != nil { return false }
+            if window?.attachedSheet != nil || services.model.closingTabID != nil { return false }
             return id == "ui.close-window" || services.isEnabled(action: id)
         }
         return true
     }
 
     @objc private func checkUpdates() { showWindow(); services?.checkForUpdates() }
-    @objc private func showWindow() { window?.makeKeyAndOrderFront(nil) }
+    @objc private func showWindow() {
+        services?.model.resumeWorkspace()
+        window?.makeKeyAndOrderFront(nil)
+    }
+    @objc private func forceCloseCurrentTab() {
+        guard let model = services?.model, let id = model.closingTabID ?? services?.activeTransientID ?? model.selectedTabID,
+              !model.isClosingWorkspace else { return }
+        guard confirmForcedClose(quitting: false) else { return }
+        model.forceCloseTab(id)
+    }
+    @objc private func forceQuitPages() {
+        guard confirmForcedClose(quitting: true) else { return }
+        forcePageClose = true
+        if services?.model.isClosingWorkspace == true {
+            services?.model.requestCloseAll(force: true) { _ in }
+        } else {
+            NSApp.terminate(nil)
+            // A synchronous Boost/persistence veto must not authorize a future ordinary quit.
+            if services?.model.isClosingWorkspace != true { forcePageClose = false }
+        }
+    }
+    private func confirmForcedClose(quitting: Bool) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = quitting ? "Force close all pages and quit?" : "Force close this page?"
+        alert.informativeText = "Unsaved changes on these pages will be lost. Use this only when a page will not let you close normally."
+        alert.addButton(withTitle: "Cancel")
+        alert.addButton(withTitle: quitting ? "Force Close Pages and Quit" : "Force Close Tab")
+        return alert.runModal() == .alertSecondButtonReturn
+    }
     @objc private func about() {
         NSApp.orderFrontStandardAboutPanel(options: [
             .applicationName: "Cairn",

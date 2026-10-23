@@ -12,6 +12,7 @@ struct SitePermissionsView: View {
 
     var body: some View {
         Form {
+            PopupExceptionsSection(model: services.model)
             Section("Site permissions") {
                 Text("Websites ask before using your camera, microphone, location and more. Choices are remembered per site, separately for each Space. Nothing is allowed unless you say so.")
                     .font(.callout)

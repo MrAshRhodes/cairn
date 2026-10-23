@@ -34,6 +34,20 @@ import Testing
         #expect(result.default == .mostRecent)
     }
 
+    @Test func explicitDecisionsNameUnavailableDestinationsWithoutSkippingTheFirstRule() throws {
+        let url = try #require(URL(string: "https://example.com"))
+        let rules = [LinkRule(text: "example", destination: .space(b)),
+                     LinkRule(text: "example", destination: .space(a))]
+        let missing = try #require(LinkRouter.decision(for: url, rules: rules, default: .mostRecent,
+                                                      spaceIDs: [a], mostRecentSpaceID: a))
+        #expect(missing.spaceID == a && missing.fallback == .deletedSpace(b))
+        let quick = try #require(LinkRouter.decision(for: url, rules: [], default: .quickWindow,
+                                                    spaceIDs: [a, b], mostRecentSpaceID: b))
+        #expect(quick.spaceID == b && quick.fallback == nil && quick.opensQuickWindow)
+        #expect(LinkRouter.decision(for: url, rules: [], default: .mostRecent,
+                                   spaceIDs: [a], mostRecentSpaceID: b) == nil)
+    }
+
     @Test func peekPolicy() throws {
         func decide(_ from: String, _ to: String, pinned: Bool = true, enabled: Bool = true) throws -> PeekPolicy.Decision {
             PeekPolicy.decide(from: URL(string: from), to: try #require(URL(string: to)), sourceIsPinnedOrFavorite: pinned, enabled: enabled)
@@ -50,15 +64,14 @@ import Testing
         #expect(try decide("https://example.com", "mailto:a@b.c") == .navigateNormally)
     }
 
-    @MainActor @Test func peekStateExpandsIntoATodayTab() throws {
+    @MainActor @Test func unattachedPeekStateCannotPretendToTransferAPage() throws {
         let model = BrowserModel(engine: StubEngine())
         var state = PeekState()
         let url = try #require(URL(string: "https://other.test"))
         state.open(url, in: model.selectedSpace.id)
         #expect(state.isOpen)
-        let expanded = state.expand(in: model)
-        let id = try #require(expanded)
-        #expect(!state.isOpen && model.item(id)?.url == url)
+        #expect(state.expand(in: model) == nil)
+        #expect(model.selectedSpace.tabs.isEmpty)
         state.close()
         let again = state.expand(in: model)
         #expect(again == nil)

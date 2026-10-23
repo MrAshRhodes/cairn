@@ -1,0 +1,36 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Cairn unsaved-page fixture</title>
+<h1>Unsaved-page close fixture</h1>
+<p>Click Edit to give the document a real user activation and unsaved work.</p>
+<textarea id="draft" aria-label="Draft">Original draft</textarea>
+<button id="edit">Edit</button>
+<button id="save">Save</button>
+<button id="popup">Open editable popup</button>
+<output id="status">Saved</output>
+<script>
+  window.__dirty = false;
+  window.__beforeUnloadCount = 0;
+  function dirty() {
+    window.__dirty = true;
+    document.querySelector('#status').value = 'Unsaved';
+  }
+  document.querySelector('#draft').addEventListener('input', dirty);
+  document.querySelector('#edit').addEventListener('click', () => {
+    document.querySelector('#draft').value = 'Unsaved Cairn fixture text';
+    dirty();
+  });
+  document.querySelector('#save').addEventListener('click', () => {
+    window.__dirty = false;
+    document.querySelector('#status').value = 'Saved';
+  });
+  document.querySelector('#popup').addEventListener('click', () => {
+    window.child = window.open('/beforeunload.html?popup=1', 'close-fixture');
+  });
+  window.addEventListener('beforeunload', event => {
+    if (!window.__dirty) return;
+    window.__beforeUnloadCount++;
+    event.preventDefault();
+    event.returnValue = '';
+  });
+</script>

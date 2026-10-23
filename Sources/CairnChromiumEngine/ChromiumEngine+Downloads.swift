@@ -42,7 +42,10 @@ final class ChromiumDownloadBridge: NSObject, @preconcurrency CCChromiumDownload
         return EngineDownloadUpdate(
             id: UInt32(truncatingIfNeeded: int("id")), state: state, receivedBytes: int("received"),
             totalBytes: int("total"), percentComplete: Int(int("percent")), bytesPerSecond: int("speed"),
-            path: path?.isEmpty == false ? path : nil)
+            path: path?.isEmpty == false ? path : nil,
+            retry: flag("retryable") ? .available : .unavailable(value["retryReason"] as? String
+                ?? "The original download context is unavailable. Start the download again from its page."),
+            attempt: UInt32(truncatingIfNeeded: int("attempt")))
     }
 }
 
@@ -60,6 +63,7 @@ extension ChromiumEngine: EngineDownloadControlling {
         case .pause: CCChromiumDownloads.pause(id)
         case .resume: CCChromiumDownloads.resume(id)
         case .cancel: CCChromiumDownloads.cancel(id)
+        case .retry(let attempt): CCChromiumDownloads.retry(id, attempt: attempt)
         }
     }
 }

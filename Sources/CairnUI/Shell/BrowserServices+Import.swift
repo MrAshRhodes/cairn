@@ -19,5 +19,8 @@ extension BrowserServices {
     func makeImportSink() -> BrowserImportSink { BrowserImportSink(model: model, history: history) }
 
     /// Removes scratch copies left by an import that was interrupted. Call once at launch.
-    func sweepImportStaging() { importStaging.sweep() }
+    func sweepImportStaging() {
+        do { try importStaging.sweep() }
+        catch { report("Import cleanup failed", detail: error.localizedDescription) }
+    }
 }

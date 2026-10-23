@@ -207,7 +207,7 @@ struct BrowserServicesTests {
         #expect(services.mostRecentSpaceID == first.id)
     }
 
-    @Test(arguments: [LinkDestination.mostRecent, .quickWindow, .space(UUID())])
+    @Test(arguments: [LinkDestination.mostRecent, .space(UUID())])
     func externalLinksUseMostRecentSpaceForFallbackDestinations(destination: LinkDestination) throws {
         let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
@@ -226,6 +226,30 @@ struct BrowserServicesTests {
         #expect(model.selectedTab?.url == url)
         #expect(model.workspace.spaces[0].tabs.count == 1)
         #expect(model.workspace.spaces[1].tabs.count == 1)
+    }
+
+    @Test func externalQuickWindowLinksUseMostRecentSpaceWithoutAPersistentTab() throws {
+        let directory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(".build/ui-links-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let older = Space(name: "Older", tabs: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 10))])
+        let recent = Space(name: "Recent", pinned: [TabItem(lastActiveAt: Date(timeIntervalSince1970: 20))])
+        let model = BrowserModel(engine: TestEngine(), workspace: Workspace(
+            spaces: [older, recent], selectedSpaceID: older.id))
+        let services = BrowserServices(model: model, directory: directory)
+        var presented: [UUID] = []
+        services.presentQuickWindow = { id, _ in presented.append(id) }
+        try services.linkRules.update(rules: [], defaultDestination: .quickWindow, peekEnabled: true)
+        let url = try #require(URL(string: "https://example.com/external"))
+
+        services.openExternalLink(url)
+
+        let id = try #require(presented.first)
+        let page = try #require(model.transientPages[id])
+        #expect(presented.count == 1 && model.transientPages.count == 1)
+        #expect(page.kind == .quickWindow && page.spaceID == recent.id && page.profileID == recent.profileID)
+        #expect(model.workspace.spaces[0].tabs.count == 1)
+        #expect(model.workspace.spaces[1].tabs.isEmpty)
     }
 
     @Test func externalLinksHonorExplicitSpaceInsteadOfMostRecent() throws {

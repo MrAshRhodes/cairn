@@ -84,4 +84,30 @@ struct NativeDownloadServicesTests {
         #expect(services.downloads.items.allSatisfy { $0.engineID == nil })
         #expect(services.issues.contains { $0.title == "Download could not finish" && $0.detail.contains("folder does not exist") })
     }
+
+    @Test func failedRetryRoutesBackToTheOriginalEngineWithoutAnotherSavePanel() throws {
+        let (services, engine, directory) = try make()
+        defer { services.shutdown(); try? FileManager.default.removeItem(at: directory) }
+        let delegate = try #require(engine.downloadDelegate)
+        var choices = 0
+        services.downloads.destinationChooser = { _, decide in
+            choices += 1
+            decide(directory.appendingPathComponent("retry.bin"))
+        }
+        services.model.downloadHandler = { _, _ in Issue.record("A failed native download must not replay a URL.") }
+        delegate.engineWillStartDownload(.init(id: 17, url: URL(string: "https://signed-in.example/file"),
+                                              suggestedFilename: "retry.bin", profileID: "original-space")) { _ in }
+        let id = try #require(services.downloads.items.first?.id)
+        delegate.engineDownloadDidUpdate(.init(id: 17, state: .failed("Connection lost"), retry: .available))
+        services.downloads.retry(id)
+        services.downloads.retry(id)
+        #expect(engine.actions.map(\.0) == [.retry(attempt: 1)] && engine.actions.map(\.1) == [17])
+        #expect(choices == 1 && services.downloads.items.count == 1)
+        delegate.engineDownloadDidUpdate(.init(id: 17, state: .failed("Still offline"), retry: .available, attempt: 1))
+        delegate.engineDownloadDidUpdate(.init(id: 17, state: .failed("Still offline"),
+                                               retry: .unavailable("The original Space was removed."), attempt: 1))
+        services.downloads.retry(id)
+        #expect(engine.actions.count == 1)
+        #expect(services.downloads.items[0].retry == .unavailable("The original Space was removed."))
+    }
 }

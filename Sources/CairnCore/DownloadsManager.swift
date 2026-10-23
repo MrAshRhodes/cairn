@@ -23,6 +23,8 @@ public struct DownloadItem: Identifiable, Sendable {
     /// -1 when unknown.
     public var totalBytes: Int64
     public var bytesPerSecond: Int64
+    public var retry: EngineDownloadRetry = .missingContext
+    public var attempt: UInt32 = 0
     public init(id: UUID = UUID(), url: URL, filename: String, progress: Double = 0,
                 status: Status = .downloading, destination: URL? = nil, errorMessage: String? = nil,
                 engineID: UInt32? = nil, receivedBytes: Int64 = 0, totalBytes: Int64 = -1, bytesPerSecond: Int64 = 0) {
@@ -42,7 +44,7 @@ public final class DownloadsManager {
     @ObservationIgnored public var onError: ((Error) -> Void)?
     @ObservationIgnored private var transfers: [UUID: DownloadTransfer] = [:]
     @ObservationIgnored var engineItemIDs: [UInt32: UUID] = [:]
-    /// Sends pause/resume/cancel to the engine; set by the app. Without it engine downloads cannot be controlled.
+    /// Sends controls/retry to the original engine; set by the app. Without it engine downloads cannot be controlled.
     @ObservationIgnored public var engineControl: ((EngineDownloadAction, UInt32) -> Void)?
     /// Asks the user for a destination; replaceable so tests do not show a panel.
     @ObservationIgnored public var destinationChooser: (_ suggestedFilename: String, _ completion: @escaping @MainActor (URL?) -> Void) -> Void = DownloadsManager.presentSavePanel
@@ -117,7 +119,15 @@ public final class DownloadsManager {
         NSWorkspace.shared.activateFileViewerSelecting([destination])
     }
 
-    public func clearFinished() { items.removeAll { !$0.status.isActive } }
+    public func clearFinished() {
+        for item in items where !item.status.isActive {
+            if let engineID = item.engineID {
+                engineItemIDs[engineID] = nil
+                engineControl?(.cancel, engineID)
+            }
+        }
+        items.removeAll { !$0.status.isActive }
+    }
 
     /// Server suggestions are labels only, never paths.
     public static func safeFilename(_ suggested: String?) -> String {

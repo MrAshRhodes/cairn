@@ -5,6 +5,11 @@ import CairnChromiumBridge
 extension ChromiumTab: @preconcurrency CCChromiumTabLifeSpanDelegate {
     func chromiumTab(_ tab: CCChromiumTab, hostsPopup url: String, disposition: CCPopupDisposition,
                      userGesture: Bool) -> CCChromiumTab? {
+        chromiumTab(tab, hostsPopup: url, disposition: disposition, userGesture: userGesture, requestingURL: "")
+    }
+
+    func chromiumTab(_ tab: CCChromiumTab, hostsPopup url: String, disposition: CCPopupDisposition,
+                     userGesture: Bool, requestingURL: String) -> CCChromiumTab? {
         guard !closed else { return nil }
         let kind: PopupDisposition
         switch disposition {
@@ -13,11 +18,15 @@ extension ChromiumTab: @preconcurrency CCChromiumTabLifeSpanDelegate {
         default: kind = .unsupported
         }
         let target = url.isEmpty ? nil : URL(string: url)
-        switch PopupPolicy.decide(url: url, disposition: kind, userGesture: userGesture, budget: &popupBudget) {
+        let requester = requestingURL.isEmpty ? nil : URL(string: requestingURL)
+        let events = delegate as? EngineTabPopupEvents
+        let allowed = requester.map { events?.engineTab(self, allowsPopupsFrom: $0) == true } ?? false
+        switch PopupPolicy.decide(url: url, disposition: kind, userGesture: userGesture, budget: &popupBudget,
+                                  allowsWithoutGesture: allowed) {
         case .cancel:
             return nil
         case .block(let reason):
-            (delegate as? EngineTabPopupEvents)?.engineTab(self, blockedPopup: target, reason: reason)
+            events?.engineTab(self, blockedPopup: target, reason: reason, requestingURL: requester)
             return nil
         case .openInTab(let activate):
             chromiumTab(tab, popup: url, activate: activate)

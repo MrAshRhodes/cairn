@@ -55,6 +55,20 @@ Both native regression tests and the full bundled 154 arm64 smoke passed locally
 2026-10-23 (first attempt, shutdown 506 ms). This evidence is not final release acceptance;
 repeat the strengthened smoke on both architectures for the reviewed shipping commit.
 
+**The integrated backlog candidate is not a passing release candidate.** Its local
+arm64 development-ad-hoc bundled run on 2026-10-23 passed download retry/destination
+checks and emitted `CAIRN_TRANSIENT_NAVIGATION_OK` and `CAIRN_CLOSE_LIFECYCLE_OK`,
+with a 505 ms shutdown. Close recovery now waits for the renderer to acknowledge
+Stay. If a renderer crash loses that acknowledgement, `Page.close` dispatches
+beforeunload on the recovered frame instead of relying on Alloy's stale pending
+close state; it never substitutes implicit approval. Error/stale-response paths
+are covered by the native lifecycle fixture.
+The run still failed five strict first-document popup Boost assertions (direct,
+redirect and POST) in [#24](https://github.com/MrAshRhodes/cairn/issues/24).
+No request replay, timeout relaxation or skipped gate was used to make it pass.
+Repeat the complete run on both architectures for the integrated commit; the
+passing subsets are not full GUI, accessibility, soak or distribution acceptance.
+
 [CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
 subsequently passed on native arm64 and x86_64 runners at commit `8a76627`, with the
 committed 154 pin: Swift/engine/release checks, first-attempt bundled smoke and
@@ -262,11 +276,28 @@ waits for their `OnBeforeClose` notifications, releases request contexts, and ca
 `CefShutdown` outside the CEF callback stack. Only then does the coordinator reply
 to AppKit's pending termination request, exactly once. Repeated/nested quit
 requests cannot bypass checks or start duplicate teardown. Every app build installs
-this hook. Explicit tab/app close currently forces close (`beforeunload` cancellation
-is not supported). This can discard unsaved page work and is a mandatory
-[public-release blocker (#22)](https://github.com/MrAshRhodes/cairn/issues/22), not
-an optional parity feature. Approval of Cairn's own Boost/persistence prompts does
-not mean the web pages consented to closing.
+this hook. Approval of Cairn's own Boost/persistence prompts does not mean the web
+pages consented to closing, so page approval is a separate step.
+
+**Unsaved-page close ([#22](https://github.com/MrAshRhodes/cairn/issues/22)).**
+Ordinary tab, window, Space and app close use `EngineTabCloseControlling.requestClose`,
+which calls CEF's `CloseBrowser(false)` so the page's `beforeunload` handler can
+answer. The app coordinator has an **unbounded** human page-approval phase before
+persistence approval and before any teardown watchdog starts. **Stay** keeps the
+tab, its live DOM and its workspace record. Tabs close one at a time: if an earlier
+page chose Leave and a later page chooses Stay, the earlier page has genuinely
+closed, but its saved record remains and it reloads on demand. This is not an
+atomic rollback of a page that already agreed to leave. A fully approved workspace
+is suspended until its window reopens, so retained windows cannot recreate browsers.
+CEF documents `DoClose` as irreversible, so it is never used as a preflight.
+Runtime shutdown refuses unapproved live browsers before starting its watchdogs.
+Discarding pages requires the explicit **Window ▸ Force Close Tab** or
+**Cairn ▸ Force Close Pages and Quit** commands, each with a discard confirmation.
+The bundled smoke runs `checkCloseLifecycle()` against
+`engine/fixtures/beforeunload.html` and prints `CAIRN_CLOSE_LIFECYCLE_OK`; its
+teardown awaits approvals rather than forcing them. Packaged GUI acceptance of
+window close, multi-tab quit, Boost/persistence cancellation and hung teardown is
+still required before #22 can be closed.
 
 Quitting is bounded. If browsers have not all closed (or a browser creation is still
 pending) 4 s after the hook starts, the bridge logs their counts and retries closing.
@@ -354,6 +385,60 @@ These are descriptions of implementation and test coverage, not a new test run
 or proof that the final release passed. Repeat the checks for the selected CEF
 pin and retain the results for both native architectures.
 
+### Runtime-dependent feature qualification
+
+The following investigations are tied to CEF `154.0.34+g14c5a08`, not a promise
+that every Chromium or Safari feature is available in this app.
+
+* **Display capture ([#25](https://github.com/MrAshRhodes/cairn/issues/25)): blocked
+  on a supported source-selection design.** `CefMediaAccessCallback` accepts a
+  permission mask, not a selected source ID. In the
+  [pinned implementation](https://github.com/chromiumembedded/cef/blob/14c5a08/libcef/browser/media_access_query.cc),
+  `GetRequestedMediaDevices` defaults to the full desktop when a display request
+  has no selected device. Simply allowing desktop bits is therefore not a chooser.
+  Returning false from Cairn's handler does not supply one either: the public
+  permission-handler contract says Alloy default handling denies. Keep display
+  bits denied until a supported chooser, origin/gesture checks, indicator, stop
+  action and lifecycle revocation are qualified with a consenting OS-permission
+  tester. Do not add `--enable-media-stream` or auto-select capture switches.
+* **Extensions ([#26](https://github.com/MrAshRhodes/cairn/issues/26)): capability
+  and isolation design remain unqualified.** The pinned public headers have no
+  dedicated extension-management header. This does **not** mean Alloy cannot
+  participate: upstream
+  [`GetAlloyTabById`](https://github.com/chromiumembedded/cef/blob/14c5a08/libcef/browser/chrome/extensions/chrome_extension_util.cc)
+  explicitly exposes matching-profile Alloy tabs to extension integration.
+  Loading an extension globally is not evidence of per-Space permissions,
+  revocation, removal or relaunch safety. Before a user-selected local extension
+  is enabled, separately decide and test the supported management API/runtime,
+  capability subset and profile boundaries. The
+  [CEF architecture guide](https://chromiumembedded.github.io/cef/architecture)
+  describes Chrome-layer functionality; it is not certification of Cairn's
+  embedded UI or Chrome Web Store compatibility. No runtime migration or global
+  `--load-extension` shortcut is enabled by this investigation.
+* **Codecs and DRM ([#28](https://github.com/MrAshRhodes/cairn/issues/28)):**
+  `engine/fixtures/playback-matrix.html` generates its own PCM WAV and VP8/VP9
+  WebM content. `PlaybackMatrixChecks.swift` records actual playback time and
+  video frames as `PLAYBACK_MATRIX` in the bundled smoke log. An unavailable
+  encoder is explicitly `not-tested`, not a decoder failure or a playback pass.
+  H.264/AAC/AV1 MIME and EME key-system queries are separately labelled
+  capability-only; they do not prove decode, protected playback or redistribution
+  rights. Read results with the log's exact CEF version and host architecture,
+  and repeat on both shipping architectures. No CDM, license request, protected
+  stream or third-party media is acquired by this fixture. Proprietary playback
+  remains blocked on official support, licensing and an authorized test corpus.
+* **Automatic WebKit DRM fallback
+  ([#29](https://github.com/MrAshRhodes/cairn/issues/29)): not enabled.** No
+  provider/key-system has yet been demonstrated lawfully in the actual embedded
+  WebKit view on both supported architectures. An EME capability result, clear
+  media playback, or success in Safari cannot authorize an engine transition.
+  A proven provider matrix and the unsaved-page close contract are prerequisites;
+  cookies, credentials and POST submissions must never be copied or replayed to
+  manufacture apparent compatibility.
+
+These are explicit blockers, not issue closures or release-gate waivers.
+
+### Current behavior and limitations
+
 Explicit limitations and policies, not silent claims of support:
 
 * Chrome extension and DRM integration are not implemented or promised.
@@ -368,13 +453,17 @@ Explicit limitations and policies, not silent claims of support:
   JavaScript and permission callbacks and dismiss their cards. Opaque per-instance request
   IDs and front-of-queue/type checks prevent stale cards answering a new page's prompt.
   Certificate errors are always refused and explained, with no
-  proceed option. Not done: screen capture (denied), `beforeunload` on tab/app close (close
-  still forces), Chromium-side permission storage.
+  proceed option. Not done: screen capture (denied), Chromium-side permission storage.
+  `beforeunload` on close is described under the application lifecycle above.
 * Page downloads are **not** converted to a URL-only transfer. Cancelling the
   destination chooser cancels that download without a failure notification.
   Only URLs pasted into the Downloads sheet use Cairn's separate downloader,
-  which receives no website cookies. Engine-download retry is not implemented;
-  pause/resume of an active transfer is a different operation.
+  which receives no website cookies. Pause/resume of an active transfer is a different
+  operation from **Retry** of a failed one. Retry reuses Chromium's retained item and
+  original request context only for an unambiguous same-URL HTTP(S) GET; unsafe
+  methods, redirects, query-bearing, `blob:`/`data:` and changed-partial cases are
+  refused visibly, never replayed ([#21](https://github.com/MrAshRhodes/cairn/issues/21),
+  [details](features/downloads.md)).
 * Website data can be cleared per Space, per site and per kind (Preferences ▸ Privacy). CEF has no
   "clear browsing data" call, so clearing is layered: cookies, HTTP cache and HTTP-auth credentials
   through CEF; localStorage, IndexedDB, Cache Storage, service workers, File System and WebSQL
@@ -401,8 +490,20 @@ Explicit limitations and policies, not silent claims of support:
   3 per 10 seconds per tab are blocked and counted in a banner on the opener. Chromium's own blocker is
   disabled (`disable-popup-blocking`) so every attempt reaches `OnBeforePopup`; the decision lives in
   `PopupPolicy`. Middle/Cmd-click arrive through `OnOpenURLFromTab` as new tabs. Popup size/position
-  features are ignored, a popup's first document is not covered by Boost scripts (CEF starts its
-  navigation before Cairn can register scripts), and there is no per-site "always allow".
+  features are ignored. An [exact-origin exception](features/popups.md)
+  ([#23](https://github.com/MrAshRhodes/cairn/issues/23)), granted from the blocked-popup banner and
+  revoked in Settings, is scoped to one Space and profile. It removes only the gesture requirement
+  for the main frame's origin; schemes and the budget still apply, and iframes never inherit it.
+* First-document Boosts ([#24](https://github.com/MrAshRhodes/cairn/issues/24)) remain **blocked**:
+  an adopted popup's first navigation can commit before its DevTools script registrations.
+  Registering scripts before `Page.enable` did not satisfy the strict first-document fixture.
+  A request-pausing experiment also stalled ordinary popups and was removed. Main-frame requests
+  therefore continue unchanged: Cairn does not cancel/replay them, reconstruct POSTs as GETs, or
+  replace intentionally blank documents to work around injection timing. A renderer-side design
+  must establish first-context ordering, exactly-once execution and revocation across process
+  swaps before this guarantee can ship. Per-site and JavaScript-trust guards still apply.
+  `checkPopupBoosts()` records first-document failures and fails the bundled smoke; moving it
+  after other scenarios gathers their evidence without waiving this gate.
 * Signing/notarization, renderer sandbox behavior, certificate failures, private
   browsing, permissions and both CPU architectures require real-device release
   validation. Compilation is not a claim that those release gates passed.

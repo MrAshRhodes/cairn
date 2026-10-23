@@ -84,7 +84,10 @@ available through the menus and command bar, with remappable shortcuts.
 Downloads started by a page, including **Download Linked File** and **Save Image As…**
 in its context menu, are performed by Chromium
 itself, so the page's cookies, sign-in, POST body and `blob:` sources are kept; Cairn
-asks where to save, shows progress, and supports pause, resume and cancel. Only links
+asks where to save, shows progress, and supports pause, resume and cancel. Failed
+downloads have a [conservative engine retry](docs/features/downloads.md) when the
+original GET transfer, tab, Space and destination remain usable; other failures
+explain why the download must be restarted from its page. Only links
 pasted into the Downloads sheet use Cairn's separate URL-based downloader, which sends no
 website cookies.
 
@@ -122,10 +125,11 @@ native execution either.
 Camera/microphone approvals, native print/save panels, real-world sign-in flows,
 long-running sessions and website compatibility still require hands-on acceptance.
 Native print and save-panel integration is implemented; these interactions are
-unverified, not missing APIs. Explicit tab/app close currently bypasses a page's
-`beforeunload` cancellation and can lose unsaved work:
-[issue #22](https://github.com/MrAshRhodes/cairn/issues/22) blocks a public Chromium
-release, including one labelled a preview.
+unverified, not missing APIs. Tab, window and app close now ask pages through
+`beforeunload` and keep pages that choose Stay; only explicit Force Close commands
+discard them. Until bundled-smoke and packaged-app acceptance are recorded,
+[issue #22](https://github.com/MrAshRhodes/cairn/issues/22) still blocks a public
+Chromium release, including one labelled a preview.
 See the [release-readiness boundaries](docs/reference/functional-spec.md#release-readiness-boundaries)
 and [release gates](docs/RELEASING.md#public-chromium-release-gates)
 for the remaining feature and validation limits. Historical local smoke results

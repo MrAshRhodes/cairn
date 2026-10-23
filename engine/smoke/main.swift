@@ -15,6 +15,7 @@ enum SmokeError: Error { case failed(String) }
     var faviconEvents: [UUID: [NSImage?]] = [:]
     var audioEvents: [UUID: [Bool]] = [:]
     var popupTabs: [EngineTab] = []
+    var popupScripts: [UUID: [EngineUserScript]] = [:]
     var blockedPopups = 0
     var closeRequests: [UUID] = []
     var healthEvents: [(tab: UUID, health: EngineTabHealth)] = []
@@ -184,18 +185,50 @@ enum SmokeError: Error { case failed(String) }
             try require(popups == 0, "unsolicited popup is blocked")
             try await checkExternalProtocols(first)
             try await runMedia()
+            try await checkPlaybackMatrix()
             try await checkPopups()
+            try await checkPopupExceptions()
             try await checkPrompts()
             try await checkDownloads()
             try await checkRendererCrashRecovery()
             try await checkNavigationWatchdog()
             try await pageToolsChecks()
+            let acceptanceChecks: [(String, @MainActor () async throws -> Void)] = [
+                ("Download retries", checkDownloadRetries),
+                ("Transient navigation", checkTransientNavigation),
+                ("Close lifecycle", checkCloseLifecycle),
+                ("Popup Boosts", checkPopupBoosts)
+            ]
+            var failures: [String] = []
+            for (name, check) in acceptanceChecks {
+                do {
+                    try await check()
+                } catch {
+                    let failure = "\(name): \(error)"
+                    failures.append(failure)
+                    fputs("CEF ACCEPTANCE FAILED: \(failure)\n", stderr)
+                }
+            }
+            try require(failures.isEmpty, "all acceptance checks pass: \(failures.joined(separator: "; "))")
             print("CAIRN_CEF_SMOKE_OK")
         } catch {
             fputs("CEF SMOKE FAILED: \(error)\n", stderr)
         }
-        let late = make("third")
-        late.load(base) // Browser creation is still pending when shutdown starts.
+        do {
+            try await approveSmokeTabClosure()
+            let late = make("third")
+            late.load(base) // Browser creation is still pending when shutdown starts.
+            guard let closing = late as? EngineTabCloseControlling else {
+                throw SmokeError.failed("Pending browser does not support close approval")
+            }
+            let approved = await withCheckedContinuation { continuation in
+                closing.requestClose { continuation.resume(returning: $0) }
+            }
+            try require(approved, "pending browser approves closure before shutdown")
+        } catch {
+            fputs("CEF SMOKE TEARDOWN FAILED: \(error)\n", stderr)
+            exit(EXIT_FAILURE)
+        }
         engine.shutdown()
         let started = ContinuousClock.now
         ChromiumEngineModule.prepareForTermination {
@@ -212,7 +245,7 @@ enum SmokeError: Error { case failed(String) }
         ])
         try await load(tab)
         healthEvents.removeAll()
-        ChromiumEngineModule.crashRendererForTesting(tab)
+        try require(ChromiumEngineModule.crashRendererForTesting(tab), "native renderer fault injection succeeds")
         try await wait { self.healthEvents.contains { $0.tab == tab.id && $0.health.isCrash } }
         try require(true, "renderer crash is reported as a health event")
         tab.reload(ignoringCache: false)

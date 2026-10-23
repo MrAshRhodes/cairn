@@ -119,6 +119,10 @@ struct DownloadsView: View {
                             Text(item.errorMessage ?? item.status.rawValue.capitalized)
                                 .font(.caption).foregroundStyle(item.status == .failed ? Color.red : .secondary)
                                 .textSelection(.enabled)
+                            if item.status == .failed, item.engineID != nil,
+                               case .unavailable(let reason) = item.retry {
+                                Text(reason).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                            }
                         }
                         Text(item.url.host ?? "").font(.caption2).foregroundStyle(.tertiary)
                     }
@@ -134,7 +138,11 @@ struct DownloadsView: View {
                         Button("Cancel") { services.downloads.cancel(item.id) }
                     } else if item.status == .completed {
                         Button("Show in Finder") { services.downloads.reveal(item.id) }
-                    } else if item.engineID == nil && (item.status == .failed || item.status == .cancelled) {
+                    } else if item.status == .failed, item.engineID != nil, item.retry == .available {
+                        Button("Retry") { services.downloads.retry(item.id) }
+                            .help("Retry the original transfer in its original Space")
+                            .accessibilityLabel("Retry \(item.filename)")
+                    } else if item.engineID == nil && item.status == .failed {
                         Button("Retry") { services.downloads.start(url: item.url, suggestedFilename: item.filename) }
                     }
                 }.padding(.vertical, 8)

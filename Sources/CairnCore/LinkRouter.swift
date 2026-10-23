@@ -6,6 +6,17 @@ public enum LinkDestination: Codable, Hashable, Sendable {
     case quickWindow
 }
 
+public struct LinkRoutingDecision: Equatable, Sendable {
+    public enum Fallback: Equatable, Sendable {
+        case deletedSpace(UUID)
+        case quickWindowUnavailable
+    }
+    public let spaceID: UUID
+    public let fallback: Fallback?
+    /// A quick window uses `spaceID`'s non-private profile without adding a persistent tab.
+    public var opensQuickWindow = false
+}
+
 public struct LinkRule: Codable, Identifiable, Hashable, Sendable {
     public enum Match: String, Codable, CaseIterable, Sendable { case contains, equals }
     public var id: UUID
@@ -32,6 +43,23 @@ public enum LinkRouter {
     public static func destination(for url: URL, rules: [LinkRule], default fallback: LinkDestination) -> LinkDestination? {
         guard isRoutable(url) else { return nil }
         return rules.first { $0.matches(url) }?.destination ?? fallback
+    }
+
+    /// Shared by external opens and opener-free new-tab requests. Only a URL is transferred, never a live view.
+    public static func decision(for url: URL, rules: [LinkRule], default fallback: LinkDestination,
+                                spaceIDs: Set<UUID>, mostRecentSpaceID: UUID) -> LinkRoutingDecision? {
+        guard spaceIDs.contains(mostRecentSpaceID),
+              let destination = destination(for: url, rules: rules, default: fallback) else { return nil }
+        switch destination {
+        case .space(let id) where spaceIDs.contains(id):
+            return LinkRoutingDecision(spaceID: id, fallback: nil)
+        case .space(let id):
+            return LinkRoutingDecision(spaceID: mostRecentSpaceID, fallback: .deletedSpace(id))
+        case .quickWindow:
+            return LinkRoutingDecision(spaceID: mostRecentSpaceID, fallback: nil, opensQuickWindow: true)
+        case .mostRecent:
+            return LinkRoutingDecision(spaceID: mostRecentSpaceID, fallback: nil)
+        }
     }
 
     /// Drops rules that point at deleted Spaces; a deleted default falls back to the most recent Space.

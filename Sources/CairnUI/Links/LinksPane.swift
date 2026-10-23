@@ -1,7 +1,7 @@
 import SwiftUI
 import CairnCore
 
-/// Preferences ▸ Links: where external links open, and rules that override that per link.
+/// Preferences ▸ Links: where external and eligible in-app new-tab links open.
 @MainActor
 struct LinksPane: View {
     let services: BrowserServices
@@ -14,9 +14,10 @@ struct LinksPane: View {
 
     var body: some View {
         Form {
-            Section("External links") {
-                destinationPicker("Open links from other apps in", selection: $fallback)
-                Text("Only http and https links are routed. The first matching rule wins.").font(.caption).foregroundStyle(.secondary)
+            Section("Link destinations") {
+                destinationPicker("Default destination", selection: $fallback)
+                Text("External links and in-app Open Link in New Tab, Cmd-click and middle-click use these rules. Only http and https links are routed; the first match wins. Same-tab navigation and opener-dependent popups stay in their Space.").font(.caption).foregroundStyle(.secondary)
+                Text("Quick windows use the most recent Space's cookies and storage, not private browsing. They are not restored; Open In Space keeps a page as a Today tab.").font(.caption).foregroundStyle(.secondary)
             }
             Section("Rules") {
                 ForEach($rules) { $rule in
@@ -34,7 +35,7 @@ struct LinksPane: View {
             }
             Section("Peek") {
                 Toggle("Preview cross-site links from pinned tabs and favorites", isOn: $peek)
-                Text("Sign-in and payment pop-ups are never previewed.").font(.caption).foregroundStyle(.secondary)
+                Text("Ordinary cross-site links open a live preview in the originating Space's profile. Expand keeps the same page as a Today tab. Forms, sign-in, payments and pop-ups keep their normal navigation and opener context.").font(.caption).foregroundStyle(.secondary)
             }
             if let error { Text(error).font(.caption).foregroundStyle(.red) }
             HStack {
@@ -52,7 +53,7 @@ struct LinksPane: View {
         Picker(title, selection: selection) {
             Text("Most recent Space").tag(LinkDestination.mostRecent)
             ForEach(spaces) { Text($0.name).tag(LinkDestination.space($0.id)) }
-            Text("Quick window (not available yet)").tag(LinkDestination.quickWindow)
+            Text("Quick window").tag(LinkDestination.quickWindow)
         }
     }
 
