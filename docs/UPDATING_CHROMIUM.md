@@ -50,8 +50,14 @@ appeared just after the check, so the assertion races a probable user-visible de
 ([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Repeat the smoke before reading
 either result as acceptance or as a regression.
 
-Native runtime/smoke and packaging acceptance of the exact engine bytes to ship must
-still be recorded for both architectures, and native Intel acceptance remains open.
+[CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
+subsequently passed on native arm64 and x86_64 runners at commit `8a76627`, with the
+committed 154 pin: Swift/engine/release checks, first-attempt bundled smoke and
+ad-hoc app/DMG packaging all passed. Binary uploads were skipped. This adds native
+Intel runtime evidence but does not fix the intermittent defect above or close full
+interactive/signed-runtime acceptance. See the
+[recorded CI evidence](RELEASING.md#building-and-testing-the-intel-app).
+Repeat validation for the exact engine bytes to ship; this result does not cover 156.
 A version report's `ok` does not mean the release-security gate passed or the build
 is validated. Re-run the fail-closed check before release; no complete CVE/backport
 audit, hardened signing, notarization or public-release approval is implied. The

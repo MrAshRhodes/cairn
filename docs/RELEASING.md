@@ -49,7 +49,7 @@ Historical evidence must not be silently carried over to changed engine bytes.
 | --- | --- |
 | CEF currency | The committed pin is CEF 154.0.34 / Chromium 154.0.8037.98. On 2026-10-23 it still failed the fail-closed currency check (exit 2) because it trails Chrome stable. The newest stable CEF, 156.0.8 / Chromium 156.0.8078.48, matches Chrome stable, but a local arm64 trial of it passed the build and unit checks and then failed the runtime smoke on both attempts ([#32](https://github.com/MrAshRhodes/cairn/issues/32)), so it is not adopted. The 154 smoke is itself intermittent ([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Require a fresh fail-closed check, reviewed security/API changes and a passing smoke on both architectures for the exact pin to ship. Consult the [dated maintenance status](UPDATING_CHROMIUM.md#status-2026-10-23); matching versions are not a CVE/backport audit or a passed release-security gate. A written gap acknowledgement covers only that confirmed gap, never the other gates. |
 | Unsaved-page safety | Resolve [#22](https://github.com/MrAshRhodes/cairn/issues/22): tab/app close currently forces `beforeunload` acceptance and can lose work. Verify cancel/approve and multi-tab quit without prematurely removing workspace state. This blocks public Chromium distribution, even a preview. |
-| Native Intel and CI | Both macOS jobs must pass for the candidate, including native Intel runtime smoke and packaging. [#30](https://github.com/MrAshRhodes/cairn/issues/30) tracks the observed failures on both runners in [run 39916059240](https://github.com/MrAshRhodes/cairn/actions/runs/39916059240). Cross-build, Mach-O inspection and Rosetta are not native Intel acceptance. |
+| Native Intel and CI | Both macOS jobs passed tests, bundled runtime smoke and ad-hoc packaging at `8a76627` with CEF 154 in [run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607), after the compiler fix for [#30](https://github.com/MrAshRhodes/cairn/issues/30). Full native Intel GUI/signed-runtime acceptance and runner continuity remain open in [#8](https://github.com/MrAshRhodes/cairn/issues/8). Repeat CI for changed candidate code or engine bytes. Cross-build, Mach-O inspection and Rosetta are not native execution evidence. |
 | Integrated GUI and real sites | Exercise startup/restoration, navigation, Spaces/splits, popups, sign-in, permissions, native print/save panels, downloads and recovery in the full app. Loopback engine fixtures and fake service tests are useful but do not close this gate. |
 | Accessibility | Complete keyboard-only and VoiceOver journeys across browser chrome, prompts, command bar, downloads and web content; verify focus entry/return and announcements. Labels and automated tests alone are insufficient. |
 | Soak and recovery | Retain duration, workload and crash/resource observations for long browsing, many tabs, active downloads, sleep/wake, network loss and relaunch. A short smoke run is not a soak. |
@@ -427,7 +427,21 @@ CI and Release are configured to build and test x86_64 natively on `macos-15-int
 macOS runner image: GitHub lists it as available until **August 2027**
 ([actions/runner-images#13045](https://github.com/actions/runner-images/issues/13045)).
 Decide before then how the Intel app is built and tested, because Apple Silicon runners
-cannot run it natively. The fallback was verified on an Apple Silicon Mac (macOS 26.6,
+cannot run it natively.
+
+**Native CI evidence, 2026-10-23:**
+[run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
+passed on both `macos-15` (arm64) and `macos-15-intel` (x86_64), using macOS 15.7.9,
+Swift 6.1.2, commit `8a76627` and CEF `154.0.34+g14c5a08+chromium-154.0.8037.98`.
+Each job passed 335 Swift tests, 46 offline engine tests, all six lifecycle tests
+after CEF preparation (including the two initially skipped native fixtures),
+107 release-tooling tests, the bundled smoke on its first attempt and ad-hoc app/DMG
+packaging with bundle verification. Both disk-image upload steps were skipped and
+the run produced zero workflow artifacts. This is native runtime evidence, not
+interactive Cairn UI acceptance, Intel performance qualification or signed/notarized
+release acceptance; [#8](https://github.com/MrAshRhodes/cairn/issues/8) remains open.
+
+The cross-build fallback was verified on an Apple Silicon Mac (macOS 26.6,
 Command Line Tools, 2026-10-22):
 
 ```sh
@@ -445,8 +459,9 @@ scripts/make-dmg.sh
   maintained", and `engine/smoke.py` packages only the host architecture, so that run used a
   throwaway wrapper that reported an x86_64 host and passed `--arch x86_64` to SwiftPM. Treat
   it as a sanity check, not as Intel validation.
-* Not verified: real Intel hardware, performance, and Developer ID signing or notarization
-  of an Intel app built on Apple Silicon (`scripts/release.sh` applies unchanged).
+* That cross-build trial did not verify real Intel hardware, performance, or Developer ID
+  signing/notarization of an Intel app built on Apple Silicon (`scripts/release.sh` applies unchanged).
+  The later native CI evidence above does not establish those cross-built artifacts' runtime acceptance.
 
 A lasting answer requires access to native Intel hardware, such as a self-hosted
 Intel Mac runner. Cross-building can supply its artifacts; Rosetta can add a
@@ -663,4 +678,6 @@ broad distribution. The v0.1.0 developer preview has not yet had its integrated 
 manually verified. No local build or signature validation alone establishes
 Gatekeeper trust or interactive GUI correctness. In particular no check in this repository has
 exercised a hardened-runtime Developer ID build, notarization or Gatekeeper acceptance
-(the packaging gate verifies them as soon as such a build exists), or real Intel hardware.
+(the packaging gate verifies them as soon as such a build exists). Native Intel CI
+has passed the automated checks recorded [above](#building-and-testing-the-intel-app);
+interactive GUI and signed-runtime acceptance remain separate.

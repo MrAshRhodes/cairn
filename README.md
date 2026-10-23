@@ -112,10 +112,13 @@ checks, not release-security certification or acceptance of a newer CEF build.
 *Actual engine compositor output. This is a local rendering fixture, not the full
 Cairn shell or a claim that every website works.*
 
-Full interactive Chromium browsing acceptance, VoiceOver, Intel CEF runtime
-testing on native Intel hardware, Apple Developer ID signing and notarization
-remain **unverified**. Cross-building or running under Rosetta does not close the
-native Intel gate, and a configured CI matrix is not a passing run.
+[CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
+passed tests, bundled Chromium smoke and ad-hoc packaging on native Apple Silicon
+and Intel runners at commit `8a76627` with CEF 154. No binaries were uploaded.
+Full interactive Chromium browsing acceptance on both architectures, VoiceOver,
+Apple Developer ID signing and notarization remain **unverified**. This CI result
+does not close the full native Intel gate; cross-building or Rosetta cannot replace
+native execution either.
 Camera/microphone approvals, native print/save panels, real-world sign-in flows,
 long-running sessions and website compatibility still require hands-on acceptance.
 Native print and save-panel integration is implemented; these interactions are
