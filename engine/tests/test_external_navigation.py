@@ -23,16 +23,40 @@ class ExternalNavigationTests(unittest.TestCase):
             "try await wait { self.externalURLs.count > count && !tab.state.isLoading }",
             'progress("handoff-wait.end", targetIndex: index)',
             'progress("timer.begin", targetIndex: index)',
-            "new Promise(resolve => setTimeout(() =>",
+            "let timerProbe = Task { @MainActor in",
+            "preserved = try await js(tab,",
+            "new Promise(resolve => {",
+            "}, 500);",
             'progress("timer.end", targetIndex: index)',
             "try require(externalURLs.count == count + 1",
             "try require(preserved == true",
         ]
         positions = [source.index(token) for token in ordered]
         self.assertEqual(positions, sorted(positions))
-        self.assertEqual(source.count("try await js(tab,"), 3)
-        self.assertIn("resolve(window.__externalProtocolDocument === 'preserved'), 500)", source)
+        self.assertIn("resolve(window.__externalProtocolDocument === 'preserved');", source)
         self.assertIn('["mailto:smoke@example.com", "cairn-smoke-unknown://declined"].enumerated()', source)
+
+    def test_timer_probe_observes_but_never_settles_or_replaces_the_original_timer(self):
+        source = (ROOT / "engine/smoke/ExternalProtocolChecks.swift").read_text()
+        probe = source.split("let timerProbe = Task", 1)[1].split("let preserved: Bool?", 1)[0]
+        timer = source.split("let preserved: Bool?", 1)[1].split('progress("timer.end"', 1)[0]
+        self.assertIn("Task.sleep(for: .seconds(2))", probe)
+        self.assertIn("if timerSettled.value || Task.isCancelled { return }", probe)
+        self.assertNotIn("setTimeout", probe)
+        self.assertNotIn("resolve(", probe)
+        self.assertEqual(timer.count("setTimeout("), 1)
+        self.assertEqual(timer.count("resolve(window.__externalProtocolDocument === 'preserved')"), 1)
+        self.assertIn("}, 500);", timer)
+        self.assertEqual(timer.count("timerProbe.cancel()"), 2)
+        self.assertIn("throw error", timer)
+        self.assertNotIn("sleep", timer)
+        self.assertNotIn("Date()", timer)
+        report = source.split("func reportTimerProbe(", 1)[1].split("func checkExternalProtocols", 1)[0]
+        self.assertIn('["visible", "hidden", "prerender"]', report)
+        self.assertIn('["loading", "interactive", "complete"]', report)
+        self.assertNotIn(r"\(reply", report)
+        self.assertNotIn(r"\(parts[1])", report)
+        self.assertNotIn(r"\(parts[2])", report)
 
     def test_smoke_progress_contains_only_synthetic_labels_indices_and_monotonic_time(self):
         source = (ROOT / "engine/smoke/ExternalProtocolChecks.swift").read_text()

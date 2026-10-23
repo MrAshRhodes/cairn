@@ -34,13 +34,19 @@ of the newer build, dated 2026-10-22, identifies Chromium `156.0.8078.48`.
 ([#32](https://github.com/MrAshRhodes/cairn/issues/32)). With an uncommitted scratch
 lock on Apple Silicon, `make cef`, the Swift suite (335 tests in 48 suites) and the
 engine tests (48) passed, and the refreshed currency report was `ok`. The bundled
-runtime smoke then **failed on both attempts**: after the geolocation denial check
+runtime smoke initially **failed on both attempts**: after the geolocation denial check
 passed, the microphone `getUserMedia` probe had not settled when Cairn's 15 s operation
-timeout fired. The committed 154 pin passed that microphone check on the same host, so
-the failure is specific to the newer build; its cause is not yet known. This was not the
-documented post-success teardown flake, so the restricted retry exception does not
-apply. Do not commit that lock or call the build validated until the smoke passes and
-the evidence below is recorded for those exact bytes.
+timeout fired. The committed 154 pin passed that microphone check on the same host.
+At diagnostic commit `e0aa63f`, two further arm64 trials of 156 instead passed the
+microphone check: host permission delivery, return from the denial-response call,
+and JavaScript evaluation completion were all observed. Both runs still failed
+the five popup Boost assertions in #24. Their logs are retained in
+`.build/smoke-cef156-diagnostics` and `.build/smoke-cef156-diagnostics-r2`.
+The earlier timeout remains unexplained; added logging can affect timing, so these
+passes are not a fix or proof of reliable behavior. The committed pin and local
+build artifacts were restored to 154. Neither failure was the documented
+post-success teardown flake. Do not commit the candidate lock until the smoke
+passes and the evidence below is recorded for those exact bytes on both architectures.
 
 **The external-protocol change passes arm64, but Intel remains blocked.** Earlier 154 runs could pass before
 Chromium published `ERR_UNKNOWN_URL_SCHEME`
@@ -68,17 +74,24 @@ The run still failed five strict first-document popup Boost assertions (direct,
 redirect and POST) in [#24](https://github.com/MrAshRhodes/cairn/issues/24).
 No request replay, timeout relaxation or skipped gate was used to make it pass.
 The passing subsets are not full GUI, accessibility, soak or distribution acceptance.
+An early renderer hook still needs a proven way to consult current Boost authority
+before the first context across renderer replacement. The pinned CEF public
+shared-message API does not establish that delivery ordering; a copied
+`extra_info` snapshot alone cannot enforce later revocation.
 
-**The integrated CI run failed on both architectures.**
-[Run 39944926330](https://github.com/MrAshRhodes/cairn/actions/runs/39944926330)
-tested `0b6bbb4` with the committed 154 pin. Both native runners passed 446 Swift
+**The diagnostic CI run still failed on both architectures.**
+[Run 39952156245](https://github.com/MrAshRhodes/cairn/actions/runs/39952156245)
+tested `e0aa63f` with the committed 154 pin, following the failures at `0b6bbb4`
+and `aa76bd0`. Both native runners passed 446 Swift
 tests, release tooling, offline engine tests and prepared-CEF lifecycle/download
 regressions. Arm64 reached the end of the bundled smoke with the same five #24
 Boost failures; its download, transient and close checks passed. Intel instead
-reported `Chromium operation timed out` during `checkExternalProtocols`, after
-the unsolicited-popup check and before any successful external-protocol assertion.
-Its log also contains EGL/GPU initialization errors, but does not establish their
-causal relationship to the timeout. The later Intel media, popup, download,
+timed out awaiting the first renderer timer in `checkExternalProtocols`.
+The marker evaluation, location assignment and host handoff wait completed.
+Browser 1's timer request 25 was submitted with matching suggested/assigned IDs,
+but no observer response arrived before the unchanged 15-second timeout.
+This run does not support an ID-mismatch or GCD reply-delivery explanation.
+EGL/GPU errors in earlier logs did not establish causality. The later Intel media, popup, download,
 transient and close scenarios were not reached. No timeout or assertion was relaxed.
 Both jobs skipped app/DMG packaging and binary uploads; the two retained workflow
 artifacts contain smoke logs, not distributable builds.
@@ -745,6 +758,15 @@ to the main queue, and `received` precedes the pending-callback lookup. A
 investigate, not an assumed cause. Records use monotonic uptime and omit request
 and response payloads, JavaScript, and URLs. `CAIRN_SMOKE_EXTERNAL` labels the
 marker, assignment, handoff wait, and timer phases by synthetic case index.
+If the timer evaluation is still pending after two seconds, the smoke issues one
+independent read-only evaluation on the same tab and logs `CAIRN_SMOKE_EXTERNAL_PROBE`
+with closed-vocabulary fields: whether the timer promise executor was `entered`,
+the 500 ms timer was `armed`, its callback `fired`, `resolved` was invoked, the
+document `marker` survived, plus `visibility` and `readyState`. This only
+discriminates; a second evaluation can itself perturb scheduling, so a timer that
+settles only after the probe is an intervention effect, not a fix. The original
+timer expression, assertions and 15-second deadline are unchanged, and a missing
+probe record means no reply arrived before the failure.
 `PROMPT_PROBE` distinguishes permission delivery, return from the host's
 permission-response call, and completion of the microphone JavaScript evaluation;
 return from the host call alone does not prove that the page's promise settled.
