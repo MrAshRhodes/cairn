@@ -42,7 +42,7 @@ documented post-success teardown flake, so the restricted retry exception does n
 apply. Do not commit that lock or call the build validated until the smoke passes and
 the evidence below is recorded for those exact bytes.
 
-**The external-protocol race has a local fix.** Earlier 154 runs could pass before
+**The external-protocol change passes arm64, but Intel remains blocked.** Earlier 154 runs could pass before
 Chromium published `ERR_UNKNOWN_URL_SCHEME`
 ([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Main-frame external navigations
 are now cancelled in `OnBeforeBrowse`, before replacing the current document or
@@ -52,8 +52,9 @@ The strengthened smoke waits across a renderer timer and verifies exactly one ca
 unchanged URL/document and no delayed error for both mailto and a declined custom scheme.
 A separate failed HTTP request verifies that genuine network errors remain visible.
 Both native regression tests and the full bundled 154 arm64 smoke passed locally on
-2026-10-23 (first attempt, shutdown 506 ms). This evidence is not final release acceptance;
-repeat the strengthened smoke on both architectures for the reviewed shipping commit.
+2026-10-23 (first attempt, shutdown 506 ms). The integrated arm64 CI run below also
+passed this check, but Intel timed out in this phase. This is not a cross-architecture
+fix or final release acceptance; keep #31 open.
 
 **The integrated backlog candidate is not a passing release candidate.** Its local
 arm64 development-ad-hoc bundled run on 2026-10-23 passed download retry/destination
@@ -66,11 +67,24 @@ are covered by the native lifecycle fixture.
 The run still failed five strict first-document popup Boost assertions (direct,
 redirect and POST) in [#24](https://github.com/MrAshRhodes/cairn/issues/24).
 No request replay, timeout relaxation or skipped gate was used to make it pass.
-Repeat the complete run on both architectures for the integrated commit; the
-passing subsets are not full GUI, accessibility, soak or distribution acceptance.
+The passing subsets are not full GUI, accessibility, soak or distribution acceptance.
 
-[CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
-subsequently passed on native arm64 and x86_64 runners at commit `8a76627`, with the
+**The integrated CI run failed on both architectures.**
+[Run 39944926330](https://github.com/MrAshRhodes/cairn/actions/runs/39944926330)
+tested `0b6bbb4` with the committed 154 pin. Both native runners passed 446 Swift
+tests, release tooling, offline engine tests and prepared-CEF lifecycle/download
+regressions. Arm64 reached the end of the bundled smoke with the same five #24
+Boost failures; its download, transient and close checks passed. Intel instead
+reported `Chromium operation timed out` during `checkExternalProtocols`, after
+the unsolicited-popup check and before any successful external-protocol assertion.
+Its log also contains EGL/GPU initialization errors, but does not establish their
+causal relationship to the timeout. The later Intel media, popup, download,
+transient and close scenarios were not reached. No timeout or assertion was relaxed.
+Both jobs skipped app/DMG packaging and binary uploads; the two retained workflow
+artifacts contain smoke logs, not distributable builds.
+
+Earlier [CI run 39926654607](https://github.com/MrAshRhodes/cairn/actions/runs/39926654607)
+passed on native arm64 and x86_64 runners at commit `8a76627`, with the
 committed 154 pin: Swift/engine/release checks, first-attempt bundled smoke and
 ad-hoc app/DMG packaging all passed. Binary uploads were skipped. This adds native
 Intel runtime evidence but predates the external-protocol fix above and does not close full
