@@ -74,10 +74,14 @@ Page Source* (⌥⌘U), *Print…* (⌘P), *Save Page as PDF…* and *Reset Zoom
   context-menu *Inspect*.
 - **View source** opens a new tab on `view-source:<page>` in the same Space. Only the
   browser can open it (typed addresses and page links cannot); only http(s)/file pages.
-- **Print** shows the system print panel (Save as PDF is its PDF menu). **Save Page as
-  PDF** uses `PrintToPDF` (backgrounds, tagged PDF, `@page` size honored).
-- **PDF viewing**: PDFs load in Chromium's built-in viewer (verified by smoke with a local
-  PDF: `application/pdf`, document title). Toolbar interaction is not smoke-tested.
+- **Print** calls Chromium's native macOS print path, which is intended to show the
+  system print panel (Save as PDF is its PDF menu). Native panel interaction and
+  printed output still require hands-on acceptance. **Save Page as PDF** uses
+  `PrintToPDF` (backgrounds, tagged PDF, `@page` size honored); the local smoke
+  checks PDF bytes, page count and size, not tagged-PDF accessibility conformance.
+- **PDF viewing**: Chromium has a built-in viewer. The local smoke checks successful
+  basic loading with `application/pdf` content or an embedded viewer, not toolbar
+  interaction or complete document rendering.
 - **Zoom** is remembered per Space profile and host in `site-zoom.json` (factor 1
   removes the entry). It follows navigation between hosts and survives relaunch.
   Unreadable files are kept untouched; the session then runs without persistence.
@@ -124,17 +128,23 @@ The integrated implementation is still a developer preview. Passing the local
 arm64 engine smoke is necessary, but not sufficient, for a public Chromium release.
 Release engineering must also enforce the Chromium currency, signing and artifact
 checks in [the maintenance guide](../UPDATING_CHROMIUM.md) and
-[release guide](../RELEASING.md).
+[release guide](../RELEASING.md#public-chromium-release-gates). The two-architecture
+lock includes SHA-256 values derived from archives checked against the publisher's
+size and SHA-1. Those pins establish repeatable bytes, not independent publisher
+authentication. Current evidence must identify the tested CEF pin; dated results
+for an earlier pin do not validate its replacement.
 
 | Area | Implemented boundary or remaining acceptance |
 | --- | --- |
 | Startup and recovery | Restored background tabs are lazy; startup, navigation and renderer failures surface recovery state. The bootstrap blank document must never report completion of the requested page. Long-duration browsing, sleep/wake and memory-pressure acceptance remain open. |
 | Popups | A user gesture and per-tab budget are required. Adopted browsers preserve the opener, messaging and request context, including intentionally blank documents. No per-site always-allow exception or requested window geometry; first-document Boost injection is not guaranteed. |
-| Permissions and dialogs | Secure-origin/default-deny policy, per-Space site decisions, JavaScript dialogs and HTTP authentication prompts are implemented. Real macOS camera/microphone approvals and site sign-in journeys still need interactive acceptance. Closing a tab forces closure rather than waiting for `beforeunload`; navigation/reload can prompt. |
+| Permissions and dialogs | Secure-origin/default-deny policy, per-Space site decisions, JavaScript dialogs and HTTP authentication prompts are implemented. Real macOS camera/microphone approvals and site sign-in journeys still need interactive acceptance. |
+| Unsaved-page close safety | Tab/app close forces closure instead of honoring `beforeunload` cancellation; navigation/reload can prompt. The resulting data-loss risk is a mandatory public-release blocker ([#22](https://github.com/MrAshRhodes/cairn/issues/22)), not merely optional feature parity. Cairn's own quit checks do not protect unsaved web forms. |
 | Downloads | Native page downloads preserve cookies, POST and blob sources, with destination choice and pause/resume/cancel. Engine-download retry is not implemented; native save-panel interaction and downloaded-file handling require acceptance. |
-| Page tools | DevTools, PDF export/viewing, source, language/UA and site zoom are implemented. Native printing, PDF toolbar interaction and private-session zoom policy are not certified. |
+| Page tools and icons | Favicons, DevTools, native print dispatch, PDF export/viewing, source, language/UA and site zoom are implemented. Native print/save panels, PDF toolbar interaction and private-session zoom policy remain unverified. Service mocks and local engine fixtures do not establish full native UI acceptance. |
 | Workspace and customization | Folders, themes, remappable shortcuts, four-pane splits, Chromium-family import, local Boost editing/sharing and link rules are implemented. Peek overlay, quick window, Safari/Firefox import, cloud sync and Arc account migration are not implemented. |
-| Compatibility and distribution | Intel runtime, complete keyboard/VoiceOver journeys, production signing/notarization and sustained website compatibility must be verified separately. Chrome extension and DRM support are not promised. |
+| Compatibility and accessibility | Native Intel runtime, complete keyboard/VoiceOver journeys, real-site sign-in/permissions and sustained website compatibility must be verified separately. Rosetta is not native Intel evidence. Chrome extension and DRM support are not promised. |
+| Distribution and updates | Ad-hoc builds are not Developer ID signed or notarized. Sparkle authentication is separate from Apple trust; downloaded-artifact Gatekeeper acceptance and a real increasing-version update/architecture-selection/profile-preservation journey remain release gates. An unpublished draft does not update the stable feed. |
 
 Do not represent these gaps as completed features or release certification. A
 release that cannot satisfy a safety gate must remain unpublished rather than

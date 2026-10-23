@@ -52,6 +52,9 @@ make app    # or `make run` to build and open it
 the first run downloads and verifies the pinned archive (about 130 MB) and builds
 its wrapper for your Mac's architecture; later runs reuse the verified cache.
 The generated `dist/Cairn.app` bundles **Chromium and its matching helper processes**.
+Both architecture records include SHA-256 pins derived from archives checked
+against the publisher's size and SHA-1. This detects later changes to those bytes;
+it is not independent publisher authentication.
 There is no engine selector or WebKit fallback. Older settings files remain
 readable, but their engine choice is ignored. Website cookies and storage from
 older WebKit builds are not migrated into Chromium profiles.
@@ -93,13 +96,16 @@ crashes and stalled navigation have visible recovery states; startup and shutdow
 have bounded deadlines. These are implemented capabilities, not a claim of full
 Arc feature parity or production readiness.
 
-Automated tests cover the integrated services and legacy settings compatibility. The
-bundled arm64 Chromium engine has also passed native rendering checks for CSS
+Automated tests cover the integrated services and legacy settings compatibility.
+[Recorded local arm64 checks](docs/UPDATING_CHROMIUM.md#updating-and-verification)
+with the committed CEF 154 pin passed native rendering checks for CSS
 grid, container queries, `:has()`, JavaScript modules, network requests, responsive
 viewport resizing, and compositor output, alongside profile isolation and lifecycle
 checks. The combined engine smoke also exercises popup messaging, permission/dialog
 denials, authenticated/POST/blob downloads, crash recovery, media, PDF export and
-page tools. These are local development checks, not release-security certification.
+page tools, but it is currently intermittent
+([#31](https://github.com/MrAshRhodes/cairn/issues/31)). These are local development
+checks, not release-security certification or acceptance of a newer CEF build.
 
 ![Actual Chromium rendering of Cairn's local responsive test page](site/assets/chromium-rendering.png)
 
@@ -107,11 +113,20 @@ page tools. These are local development checks, not release-security certificati
 Cairn shell or a claim that every website works.*
 
 Full interactive Chromium browsing acceptance, VoiceOver, Intel CEF runtime
-testing, Apple Developer ID signing and notarization remain **unverified**.
+testing on native Intel hardware, Apple Developer ID signing and notarization
+remain **unverified**. Cross-building or running under Rosetta does not close the
+native Intel gate, and a configured CI matrix is not a passing run.
 Camera/microphone approvals, native print/save panels, real-world sign-in flows,
 long-running sessions and website compatibility still require hands-on acceptance.
+Native print and save-panel integration is implemented; these interactions are
+unverified, not missing APIs. Explicit tab/app close currently bypasses a page's
+`beforeunload` cancellation and can lose unsaved work:
+[issue #22](https://github.com/MrAshRhodes/cairn/issues/22) blocks a public Chromium
+release, including one labelled a preview.
 See the [release-readiness boundaries](docs/reference/functional-spec.md#release-readiness-boundaries)
-for the remaining feature and validation limits.
+and [release gates](docs/RELEASING.md#public-chromium-release-gates)
+for the remaining feature and validation limits. Historical local smoke results
+are not acceptance of a newer CEF pin or the final downloaded application.
 Private update-signing material remains in the maintainer's local Keychain, not
 GitHub. The weekly release workflow is wired but cannot publish until CI signing
 is explicitly provisioned; see the [release guide](docs/RELEASING.md#weekly-release-automation).
@@ -127,7 +142,10 @@ has separate dependency, helper-process, packaging and security requirements, an
 it is not updated by installing Google Chrome. Follow the [Chromium maintenance guide](docs/UPDATING_CHROMIUM.md);
 do not enable an old CEF build just because it compiles. A version-monitoring
 workflow cannot guarantee upstream fixes exist or ship them without a release.
-The current pin trails Chrome stable; public Chromium distribution remains gated.
+The committed pin still trails Chrome stable; see the guide's dated comparison. The
+newest stable CEF was tried locally but is not adopted because it failed the runtime
+smoke ([#32](https://github.com/MrAshRhodes/cairn/issues/32)). Even closing the
+version gap would not close the other public Chromium release gates.
 
 The historical v0.1.0 download uses **system WebKit**, updated by Apple through
 macOS/Safari updates. This does not describe the current source or future releases.

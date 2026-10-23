@@ -24,7 +24,11 @@ not notarized**. It is a developer preview, not a Gatekeeper-trusted distributio
 The integrated GUI has **not yet been manually verified**. Build, packaging and
 signature checks must not be presented as a completed manual GUI acceptance test.
 
-The public update key for this release is:
+As of **2026-10-23**, `v0.2.0` is an unpublished draft prerelease with no assets,
+not an installable Chromium release or an upgrade available from the stable feed.
+The checked-in release machinery does not change that status.
+
+The public update key designated by v0.1.0, and retained for compatible updates, is:
 
 ```text
 ugn8YkRCxDuzUN63cb+sFMayO6As26BL/1FBbbUs9a8=
@@ -34,9 +38,41 @@ This public key may be committed or stored as a GitHub variable. Its correspondi
 private key stays in the maintainer's local Keychain; never print it, pass it in
 command-line arguments, write it to a key file, or upload it to GitHub.
 
+## Public Chromium release gates
+
+Use this checklist to decide whether a candidate may be published, not merely
+whether its build succeeded. Record the exact commit, CEF pin, architecture,
+signing mode, command or manual steps, result and retained evidence for each gate.
+Historical evidence must not be silently carried over to changed engine bytes.
+
+| Gate | Required evidence; current boundary |
+| --- | --- |
+| CEF currency | The committed pin is CEF 154.0.34 / Chromium 154.0.8037.98. On 2026-10-23 it still failed the fail-closed currency check (exit 2) because it trails Chrome stable. The newest stable CEF, 156.0.8 / Chromium 156.0.8078.48, matches Chrome stable, but a local arm64 trial of it passed the build and unit checks and then failed the runtime smoke on both attempts ([#32](https://github.com/MrAshRhodes/cairn/issues/32)), so it is not adopted. The 154 smoke is itself intermittent ([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Require a fresh fail-closed check, reviewed security/API changes and a passing smoke on both architectures for the exact pin to ship. Consult the [dated maintenance status](UPDATING_CHROMIUM.md#status-2026-10-23); matching versions are not a CVE/backport audit or a passed release-security gate. A written gap acknowledgement covers only that confirmed gap, never the other gates. |
+| Unsaved-page safety | Resolve [#22](https://github.com/MrAshRhodes/cairn/issues/22): tab/app close currently forces `beforeunload` acceptance and can lose work. Verify cancel/approve and multi-tab quit without prematurely removing workspace state. This blocks public Chromium distribution, even a preview. |
+| Native Intel and CI | Both macOS jobs must pass for the candidate, including native Intel runtime smoke and packaging. [#30](https://github.com/MrAshRhodes/cairn/issues/30) tracks the observed failures on both runners in [run 39916059240](https://github.com/MrAshRhodes/cairn/actions/runs/39916059240). Cross-build, Mach-O inspection and Rosetta are not native Intel acceptance. |
+| Integrated GUI and real sites | Exercise startup/restoration, navigation, Spaces/splits, popups, sign-in, permissions, native print/save panels, downloads and recovery in the full app. Loopback engine fixtures and fake service tests are useful but do not close this gate. |
+| Accessibility | Complete keyboard-only and VoiceOver journeys across browser chrome, prompts, command bar, downloads and web content; verify focus entry/return and announcements. Labels and automated tests alone are insufficient. |
+| Soak and recovery | Retain duration, workload and crash/resource observations for long browsing, many tabs, active downloads, sleep/wake, network loss and relaunch. A short smoke run is not a soak. |
+| Distribution and updates | Verify the actual downloaded artifacts, increasing-version Sparkle installation on both architectures, architecture selection, profile preservation and rollback/recovery using copies. Confirm the external Homebrew tap uses the per-architecture archives. Synthetic signing tests do not prove this path. |
+| Documentation | Keep capability, pin/provenance, validation limits and release notes consistent. Distinguish implemented-but-unverified behavior from missing features; never describe an unpublished draft as an available release. |
+
+The [functional specification](reference/functional-spec.md#release-readiness-boundaries)
+defines feature boundaries; the [validation section](#validation-boundaries)
+explains what packaging and signing tests do not prove.
+
+**Trust is a separate dimension.** A local or CI ad-hoc build is development
+evidence, not an Apple-trusted release. Sparkle Ed25519 signatures authenticate
+the update archive and feed; they neither supply Developer ID nor notarization.
+A trusted public distribution additionally requires same-team Developer ID
+signing, Hardened Runtime, notarization, stapling and Gatekeeper acceptance of
+the downloaded app and DMG. An intentionally ad-hoc preview must say so explicitly
+and must not be presented as meeting that trust gate. A preview label, draft
+release, risk acknowledgement or successful signature check cannot waive the
+unsaved-page safety or other public-release gates.
+
 ## Weekly release automation
 
-The Release workflow checks the default branch every **Monday at 06:17 UTC**.
+The Release workflow is configured to check the default branch every **Monday at 06:17 UTC**.
 GitHub schedules are best-effort, not a guaranteed publication time. It compares
 the checked-out commit with the latest published stable release:
 
@@ -305,20 +341,23 @@ the archives or appcast after signing.
 
 ### Publish finished assets separately
 
-Publication is a separate maintainer action, outside the signing subshell. First
-review the generated release notes and verify the asset checksums with
+Publication is a separate maintainer action, outside the signing subshell, and
+is blocked while the [public-release gates](#public-chromium-release-gates) remain unmet.
+The following stages a draft for review; it is not approval to publish the current
+candidate. First review the generated release notes and verify the asset checksums with
 `(cd dist/release && shasum -a 256 -c SHA256SUMS)`. The command below preserves the
-generated notes and appends the GUI verification limitation to the public release
+generated notes and appends the currently unmet GUI verification limitation to the draft
 description without changing any checksummed file.
 
-After the maintainer has approved publication, ensure the reviewed release commit
-is already present on GitHub. Create the remote `v0.1.1` tag through `gh release`
+After the maintainer has approved staging the artifacts, ensure the reviewed release commit
+is already present on GitHub. Target `v0.1.1` through `gh release`
 rather than separately pushing a tag, so this local publication path does not
 deliberately invoke the tag-push release workflow. Upload only the final public assets:
 
 ```sh
 release_commit="$(git rev-parse HEAD)"
 gh release create v0.1.1 --repo mrashrhodes/cairn --target "$release_commit" \
+  --draft --prerelease \
   --title 'Cairn v0.1.1 — Chromium developer preview' \
   --notes "$(cat dist/release/RELEASE-NOTES.txt; printf '\nIntegrated GUI has not yet been manually verified.\n')" \
   dist/release/Cairn-0.1.1-arm64.zip \
@@ -328,6 +367,13 @@ gh release create v0.1.1 --repo mrashrhodes/cairn --target "$release_commit" \
   dist/release/appcast.xml dist/release/SHA256SUMS \
   dist/release/RELEASE-INFO.json
 ```
+
+Keep the draft unpublished while any public-release gate remains unmet. Before
+publication, replace the GUI limitation with the actual accepted result and
+references to the retained gate evidence; do not just delete the warning.
+Publishing a prerelease still does not update the stable feed. Promote to a normal
+release only when deliberately making the accepted candidate available to stable
+updaters, retaining its actual Apple signing/notarization status.
 
 Do not run a separate `git push` for the tag. Never overwrite or move the tag after
 publication. No Keychain item, environment dump, private-key file, certificate or
@@ -377,7 +423,7 @@ application change, not something the packaging scripts can add.
 
 ### Building and testing the Intel app
 
-CI and Release build and test x86_64 natively on `macos-15-intel`, GitHub's last x86_64
+CI and Release are configured to build and test x86_64 natively on `macos-15-intel`, GitHub's last x86_64
 macOS runner image: GitHub lists it as available until **August 2027**
 ([actions/runner-images#13045](https://github.com/actions/runner-images/issues/13045)).
 Decide before then how the Intel app is built and tested, because Apple Silicon runners
@@ -402,13 +448,16 @@ scripts/make-dmg.sh
 * Not verified: real Intel hardware, performance, and Developer ID signing or notarization
   of an Intel app built on Apple Silicon (`scripts/release.sh` applies unchanged).
 
-A lasting answer is a self-hosted Intel Mac runner, or cross-built Intel apps smoke-tested
-under Rosetta once `engine/smoke.py` accepts an architecture. Record the decision here
-before the image is retired; never ship an Intel app that nobody has run.
+A lasting answer requires access to native Intel hardware, such as a self-hosted
+Intel Mac runner. Cross-building can supply its artifacts; Rosetta can add a
+sanity check but cannot replace native runtime acceptance. Record the decision
+here before the image is retired; never claim an Intel gate passed without a
+successful native run of the candidate.
 
-## Optional Developer ID and notarization
+## Developer ID and notarization for trusted distribution
 
-This is a future opt-in path, not the v0.1.0 preview's signing status. With the
+This is optional for local/ad-hoc development, but required for a trusted public
+distribution. It is not the v0.1.0 preview's signing status. With the
 public Sparkle key available inside a non-tracing subshell and an
 already-installed local identity, choose a new, unused version higher than the
 published preview:
@@ -438,16 +487,24 @@ keychain or the user's keychain search list. Do not enable shell tracing around 
 
 ## GitHub Actions (maintainer setup, not automatic secret provisioning)
 
-CI tests on macOS Apple Silicon and Intel, validates workflows/shell scripts, prepares
-CEF with `make cef` (the pinned archive is cached), runs the native Chromium lifecycle
-regressions, runs the development ad-hoc Chromium smoke test through `scripts/run-smoke.sh`
+CI is configured to test on macOS Apple Silicon and Intel, validate workflows/shell scripts, prepare
+CEF with `make cef` (the pinned archive is cached), run the native Chromium lifecycle
+regressions, run the development ad-hoc Chromium smoke test through `scripts/run-smoke.sh`
 (one retry, only for the documented teardown flake; its logs and any crash reports are kept as
-`smoke-logs-<runner>` when a step fails or a retry was needed), and packages a clearly ad-hoc,
+`smoke-logs-<runner>` when a step fails or a retry was needed), and package a clearly ad-hoc,
 single-architecture Chromium DMG per runner without any secrets. The bundle must pass the
-[packaging gate](#packaging-gate). Those DMGs are
-short-lived development artifacts, not releases. This is a functional Chromium
+[packaging gate](#packaging-gate). Packaging and verification run regardless of
+artifact-upload choice. Development DMGs are uploaded only for an explicitly
+manual dispatch with `upload_development_artifacts=true`; the input defaults to
+`false`, and push, pull-request and reusable CI runs do not upload those binaries.
+When requested, the seven-day artifacts are ad-hoc development builds, not
+releases. Diagnostic smoke logs follow their separate retention policy above.
+This is a functional Chromium
 check, **not** a Developer ID, notarization, hardened-runtime or CEF security-gap
 gate. [CI.md](CI.md) describes every job, cache and artifact.
+The current failure evidence and required native validation are recorded in the
+[release gates](#public-chromium-release-gates); workflow configuration is not
+proof that these jobs have passed.
 
 **Automatic release signing/publication is not configured.** Private
 signing material has not been uploaded to GitHub and is not uploaded by the local

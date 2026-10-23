@@ -15,19 +15,69 @@ Downloaded binaries and build caches stay in ignored `engine/cef/` and
 
 ## Security status and release gate
 
-Verified against the upstream feeds on **2026-10-22** (`python3 engine/tool.py check`):
+### Status, 2026-10-23
 
 | Feed | Version |
 | --- | --- |
-| Pinned CEF (`engine/cef.lock.json`) | `154.0.34+g14c5a08+chromium-154.0.8037.98` |
+| Committed pin (`engine/cef.lock.json`) | `154.0.34+g14c5a08+chromium-154.0.8037.98` |
+| Newest **stable CEF** published for both macOS architectures | `156.0.8+g426920c+chromium-156.0.8078.48` |
+| Chrome stable for macOS | `156.0.8078.48` |
+
+**The committed pin still has a SECURITY GAP. Do not label it “current Chrome”,
+“up to date” or security-equivalent to Chrome stable.** `python3 engine/tool.py check`
+on 2026-10-23 still exited 2 for it, although the newest common stable CEF now
+matches Chrome stable (`upstream_security_gap=false` for that build). The
+[CEF source commit](https://github.com/chromiumembedded/cef/commit/426920c33ef22551e0b8f48cf343d623ac25642d)
+of the newer build, dated 2026-10-22, identifies Chromium `156.0.8078.48`.
+
+**That newer build was tried locally and is not adopted**
+([#32](https://github.com/MrAshRhodes/cairn/issues/32)). With an uncommitted scratch
+lock on Apple Silicon, `make cef`, the Swift suite (335 tests in 48 suites) and the
+engine tests (48) passed, and the refreshed currency report was `ok`. The bundled
+runtime smoke then **failed on both attempts**: after the geolocation denial check
+passed, the microphone `getUserMedia` probe had not settled when Cairn's 15 s operation
+timeout fired. The committed 154 pin passed that microphone check on the same host, so
+the failure is specific to the newer build; its cause is not yet known. This was not the
+documented post-success teardown flake, so the restricted retry exception does not
+apply. Do not commit that lock or call the build validated until the smoke passes and
+the evidence below is recorded for those exact bytes.
+
+**The 154 smoke is intermittent.** Of two local runs on 2026-10-23, one passed
+completely and one failed the external-protocol check (“external protocol is reported to
+the app, never launched by Chromium”) because the tab's `ERR_UNKNOWN_URL_SCHEME` load
+error was already published when the check ran. In the passing run the same error
+appeared just after the check, so the assertion races a probable user-visible defect
+([#31](https://github.com/MrAshRhodes/cairn/issues/31)). Repeat the smoke before reading
+either result as acceptance or as a regression.
+
+Native runtime/smoke and packaging acceptance of the exact engine bytes to ship must
+still be recorded for both architectures, and native Intel acceptance remains open.
+A version report's `ok` does not mean the release-security gate passed or the build
+is validated. Re-run the fail-closed check before release; no complete CVE/backport
+audit, hardened signing, notarization or public-release approval is implied. The
+[other release gates](RELEASING.md#public-chromium-release-gates), including
+unsaved-page close safety, remain mandatory.
+
+### Historical snapshot, 2026-10-22
+
+The previous feed check recorded:
+
+| Feed | Version |
+| --- | --- |
+| Pin at that time | `154.0.34+g14c5a08+chromium-154.0.8037.98` |
 | Newest **stable CEF** published for both macOS architectures | `156.0.7+g47dbc1d+chromium-156.0.8078.17` |
 | Chrome stable for macOS | `156.0.8078.48` |
 
-**There is a SECURITY GAP. Do not label this pin “current Chrome”, “up to date” or
-security-equivalent to Chrome stable.** The pin trails by two major versions, and even the
-newest stable CEF trails Chrome stable by a few patch releases, so adopting it
-([routine bump](#routine-security-bump)) narrows the gap but does not close it. CEF beta is not automatically promoted to
-work around a stable-channel gap. Comparing versions is an alert, not a complete
+That pin had a **SECURITY GAP** of two major versions, which still applies to the
+unchanged committed pin. At that time, even the newest common stable CEF trailed Chrome
+stable by a few patch releases; the trial bump below narrowed but did not close the gap.
+This dated evidence is retained for the history of the comparison; the 2026-10-23 status
+above supersedes its newest-CEF row.
+
+### Gate policy and monitoring
+
+CEF beta is not automatically promoted to work around a stable-channel gap.
+Comparing versions is an alert, not a complete
 CVE or backport audit: older branches may contain backports and equal version
 numbers do not independently prove safety. Consult
 [Chrome releases](https://chromereleases.googleblog.com/),
@@ -59,8 +109,9 @@ Unavailable or invalid upstream metadata cannot be overridden. Local
 finalization requires the equivalent gate record; see
 [the release guide](RELEASING.md#check-the-engine-and-authenticate-both-builds).
 
-The scheduled `engine-bump.yml` workflow (“Chromium maintenance”) runs daily at 07:23 UTC and on
-manual dispatch. It runs the offline updater tests, then compares the locked Chromium version
+The `engine-bump.yml` workflow (“Chromium maintenance”) is configured for daily runs
+at 07:23 UTC and manual dispatch; deployment is not yet verified (see the dated
+automation status below). It runs the offline updater tests, then compares the locked Chromium version
 **and** the newest stable CEF with Chrome stable, even when no newer CEF archive is available,
 and writes the result to the run summary and the `chromium-status` artifact:
 
@@ -90,6 +141,15 @@ public repository after 60 days without repository activity: re-enable them in t
 treat a missing daily run as an alarm. A failed feed request (`status: failed`) must be
 investigated rather than dismissed.
 
+**Automation status, 2026-10-23:** the workflow described here is part of open
+[PR #2](https://github.com/MrAshRhodes/cairn/pull/2), not evidence that daily issue
+tracking is active on the default branch. The observed
+[maintenance run](https://github.com/MrAshRhodes/cairn/actions/runs/39783441548)
+failed because Actions was not permitted to create/approve pull requests. Confirm
+the repository permission, merge the reviewed workflow, and retain a successful
+maintenance run before relying on automatic proposals or tracking-issue updates.
+Until then, maintainers must run the check and record the result themselves.
+
 ## Explicit dependency preparation
 
 Requirements: macOS 14+, C++20-capable Apple tools, CMake 3.21+, and Python with
@@ -116,15 +176,17 @@ The bundler builds the main app and helper with the same architecture/configurat
 and passes the resolved helper path, rather than assuming SwiftPM's generic debug path.
 
 `cef.lock.json` pins the stable CEF version, contained Chromium version, exact
-minimal archive name, byte size and upstream SHA-1 for **both** macOS architectures.
-The fetcher checks size and checksum before extracting, including cached archives;
+minimal archive name, byte size, upstream SHA-1 and recorded SHA-256 for **both**
+macOS architectures. The current lock already includes both SHA-256 values.
+The fetcher checks size and the pinned checksums before extracting, including cached archives;
 rejects path/link escapes; and prints the downloaded archive's SHA-256. Spotify's
 index currently publishes SHA-1, not a signed SHA-256 manifest. Consequently this
 is reproducibility/integrity pinning over HTTPS, **not independent publisher
-authentication**. A `sha256` field per artifact is verified as well: `python3 engine/tool.py hash`
+authentication**. The lock format permits an optional `sha256`, but when present
+the fetcher enforces it. `python3 engine/tool.py hash`
 records it for both archives from a download that already matched the published size and SHA-1, and
-the maintenance workflow does this for every proposed pin. The currently committed pin predates that
-and has none yet, so run `hash` once (or take the next bump). The hash comes from the same download:
+the maintenance workflow is configured to do this for every proposed pin.
+Run `hash` after selecting a new pin, before review. The hash comes from the same download:
 it detects a later substitution of the archive or a damaged cache, not a malicious first download.
 Do not invent stronger provenance guarantees. Network access retries four times with growing pauses;
 a download goes through a partial file that replaces the cached archive only after the size and
@@ -143,8 +205,9 @@ build also set `CAIRN_CEF_ARCH=x86_64` and pass the matching SwiftPM `--arch x86
 (or target triple). Do not mix arm64 helper binaries with x86_64 CEF. Bundling
 rejects mismatches and universal main/helper binaries. Publish separate,
 same-version arm64 and x86_64 apps; a universal CEF packaging pipeline is not
-implemented. `make app ARCH=x86_64` runs the whole cross build. CI builds and tests the Intel app
-natively on `macos-15-intel`; what is verified for Intel and the plan for that runner's retirement
+implemented. `make app ARCH=x86_64` runs the whole cross build. CI is configured to build and test the Intel app
+natively on `macos-15-intel`; configuration alone is not passing native evidence.
+What is verified for Intel and the plan for that runner's retirement
 are in [the release guide](RELEASING.md#building-and-testing-the-intel-app).
 
 ## Application integration and lifecycle
@@ -188,8 +251,11 @@ waits for their `OnBeforeClose` notifications, releases request contexts, and ca
 `CefShutdown` outside the CEF callback stack. Only then does the coordinator reply
 to AppKit's pending termination request, exactly once. Repeated/nested quit
 requests cannot bypass checks or start duplicate teardown. Every app build installs
-this hook. Explicit tab/app close currently forces close (beforeunload cancellation
-is not supported).
+this hook. Explicit tab/app close currently forces close (`beforeunload` cancellation
+is not supported). This can discard unsaved page work and is a mandatory
+[public-release blocker (#22)](https://github.com/MrAshRhodes/cairn/issues/22), not
+an optional parity feature. Approval of Cairn's own Boost/persistence prompts does
+not mean the web pages consented to closing.
 
 Quitting is bounded. If browsers have not all closed (or a browser creation is still
 pending) 4 s after the hook starts, the bridge logs their counts and retries closing.
@@ -255,18 +321,31 @@ network, swap, crash-log or installation artifacts.
 
 Implemented through real CEF APIs: URL/title/loading/back-forward/TLS state,
 navigation/reload/stop, load and renderer errors, user-gesture popup requests,
-download delegation, close, zoom, find, JS evaluation, document-start/end scripts,
-and PNG compositor snapshots. JS values are JSON-compatible results (including
+in-engine downloads, close, zoom, find, JS evaluation, document-start/end scripts,
+favicons, DevTools, printing/PDF export and PNG compositor snapshots.
+JS values are JSON-compatible results (including
 awaited promises); non-serializable values and exceptions are reported as errors.
 Internal DevTools messages have a 15-second timeout and **do not open a debugging
 port**. Script registration is completed before queued initial navigation; scripts
 target future documents. End scripts run at `DOMContentLoaded`. Producers remain
 responsible for per-site guards. Snapshot/find require a mounted, ready browser.
 
-Explicit limitations, not silent claims of support:
+### Implemented capabilities and evidence limits
 
-* Favicons are not yet fetched. There is no extension/DRM integration, DevTools
-  frontend, PDF export or native printing API.
+| Capability | Implemented behavior | Evidence and remaining acceptance |
+| --- | --- | --- |
+| Favicons | CEF downloads icon candidates through the page's request context and delivers decoded PNG data. Cairn caches icons per profile and host, with a globe fallback. | The local smoke checks delivery of a decoded image and the request's page origin; unit tests cover profile-separated cache lookup and an in-memory-only store. This is not an audit of every site's icons or a complete private-browsing journey. |
+| Developer Tools | A separate Chromium DevTools window supports open, inspect and close; there is no remote debugging port. | The bundled smoke exercises three open/close rounds, including an inspect request. Full interactive tooling and final-release lifecycle acceptance remain separate. |
+| Printing and PDFs | Print calls CEF's native macOS print path. Save Page as PDF uses `PrintToPDF` with backgrounds, tagged output and CSS page size; Chromium also has a PDF viewer. | Service tests check dispatch, save cancellation and error reporting with fake tabs. The engine smoke checks PDF bytes, page count/size and basic viewer loading. Native print/save panels, printed output and PDF toolbar interaction remain unverified. Tagged-PDF configuration alone does not establish accessibility conformance. |
+| Page downloads | Chromium retains the transfer, preserving the originating request context, cookies, authentication, POST body and `blob:`/`data:` sources. Cairn chooses the destination and displays progress, pause/resume/cancel and terminal state. | The local smoke checks exact bytes for a cookie-gated download, profile isolation, POST/blob transfers, pause/resume/cancel and interruption. Service tests check destination validation, control routing and quarantine handling. Real-site sign-in, native save-panel interaction and downloaded-file handling remain acceptance work; `data:` is not separately exercised by that smoke. |
+
+These are descriptions of implementation and test coverage, not a new test run
+or proof that the final release passed. Repeat the checks for the selected CEF
+pin and retain the results for both native architectures.
+
+Explicit limitations and policies, not silent claims of support:
+
+* Chrome extension and DRM integration are not implemented or promised.
 * Page prompts are client-implemented (`CCPermissionHandler.mm`, `CCJSDialogHandler.mm`,
   `GetAuthCredentials`/`OnCertificateError` in `CCRequestHandler.mm`) and shown as cards on
   the tab that raised them. Site permissions are denied unless allowed; decisions are
@@ -280,8 +359,11 @@ Explicit limitations, not silent claims of support:
   Certificate errors are always refused and explained, with no
   proceed option. Not done: screen capture (denied), `beforeunload` on tab/app close (close
   still forces), Chromium-side permission storage.
-* CEF's own downloads are cancelled and URLs are delegated to Cairn. Transferring
-  authenticated CEF cookies to a separate downloader is not implemented.
+* Page downloads are **not** converted to a URL-only transfer. Cancelling the
+  destination chooser cancels that download without a failure notification.
+  Only URLs pasted into the Downloads sheet use Cairn's separate downloader,
+  which receives no website cookies. Engine-download retry is not implemented;
+  pause/resume of an active transfer is a different operation.
 * Website data can be cleared per Space, per site and per kind (Preferences ▸ Privacy). CEF has no
   "clear browsing data" call, so clearing is layered: cookies, HTTP cache and HTTP-auth credentials
   through CEF; localStorage, IndexedDB, Cache Storage, service workers, File System and WebSQL
@@ -419,8 +501,9 @@ they depend on CEF publishing in time and on a maintainer being available.
 * **Validate and ship** it within **72 hours** of CEF publishing it for both architectures, or say on the
   tracking issue why that is not possible.
 
-The automation ends at a draft pull request. Merging, releasing and accepting any remaining risk are
-always a maintainer's decisions.
+Once deployed and permitted to open pull requests, the automation ends at a draft
+pull request. Merging, releasing and accepting any remaining risk are always a
+maintainer's decisions.
 
 1. **Triage.** The daily maintenance run keeps the `chromium-security` tracking issue current while the pin
    trails Chrome stable, and opens or refreshes a draft pull request on `maintenance/cef-stable` whenever
@@ -570,7 +653,12 @@ evidence:
   `scripts/swiftw build` with **no source change** (API `15400` still compiles), the 6 native lifecycle tests,
   all 329 Swift tests and `ARCH=arm64 scripts/bundle-app.sh` ending in the packaging gate all passed. Not run:
   the GUI smoke test and the x86_64 build on 156, and the manual checks, so the bump is feasible but not
-  approved. The committed lock still pins 154.
+  approved. The committed lock still pins 154. A later local trial of the newer
+  156.0.8 build (2026-10-23) passed the build and unit checks but failed the
+  bundled runtime smoke, so that build is not adopted either; see the
+  [status section](#status-2026-10-23) and
+  [#32](https://github.com/MrAshRhodes/cairn/issues/32). The 156.0.7 results above
+  do not carry over to it.
 
 Before approving an update: review relevant security fixes and CEF API changes;
 fetch/check both architectures; build the version-matched wrapper and helper;
